@@ -26,6 +26,16 @@ export interface IndexEntry {
   readonly objects: number
   /** A BigQuery build's pass: projects (discovering accessible projects), names, then details; `estimate` while the billed bulk path's estimate and cost prompts come first. */
   readonly phase?: 'estimate' | 'projects' | 'names' | 'details'
+  /** BigQuery names pass: the total can still grow while projects are being listed. */
+  readonly growing?: true
+  /** BigQuery: its rate limit is refusing calls, which retry. */
+  readonly throttled?: true
+  /** BigQuery, while building: when the oldest dataset loaded from the saved index that the build has not checked yet was read. */
+  readonly savedAt?: string
+  /** BigQuery, while building: the build is a full one, which checks what was loaded (so no savedAt means all is checked). */
+  readonly full?: true
+  /** The running build is a check (a stale-only build): what is held stays searchable while it verifies part of it. */
+  readonly checking?: true
   readonly status?: ObjectIndexStatus
   readonly error?: string
 }
@@ -103,7 +113,7 @@ export interface RevealHost {
   readonly groupBySchema?: boolean
 }
 export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
-  readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'> & Partial<Pick<VariaApi, 'bigQueryIndexEstimate'>>
+  readonly api: Pick<VariaApi, 'explorerIndex' | 'explorerSearch' | 'explorerCancel' | 'onExplorerIndexProgress'> & Partial<Pick<VariaApi, 'bigQueryIndexEstimate' | 'explorerIndexStatus'>>
   readonly documents: Pick<DocumentService, 'openCustom' | 'registerProvider' | 'get' | 'activate' | 'getSnapshot'> & Partial<Pick<DocumentService, 'update' | 'subscribe'>>
   readonly connections: Pick<ConnectionService, 'getSnapshot' | 'subscribe' | 'get'>
   readonly settings: { get<K extends SettingKey>(key: K): SettingValue<K> }
@@ -118,9 +128,11 @@ export interface ObjectSearchOptions extends CustomDocumentTargetOptions {
   /** Per-connection BigQuery starred projects to include in Search Objects index builds and bulk estimates. */
   readonly starredProjects?: (connectionId: string) => readonly string[]
 }
-/** A BigQuery refresh: one project or dataset re-read whole (Object Explorer's Refresh), or only if missing/unindexed, the datasets DDL marked, or everything
- *  (Refresh on the server's node). */
-export type BigQueryRefresh = { readonly scope: BigQueryIndexScope; readonly missingOnly?: true } | { readonly stale: true } | { readonly full: true }
+/** A partial build: BigQuery's scoped re-read or full rebuild, or either engine's check (`stale`), which for SQL Server may name a
+ *  database or every one (Object Explorer's Refresh) to check whatever its age. */
+export type BigQueryRefresh = { readonly scope: BigQueryIndexScope; readonly missingOnly?: true } | { readonly stale: true; readonly database?: string; readonly checkAll?: true } | { readonly full: true }
+/** Outcome of `refreshBigQueryScopesOutcome`: distinguishes deliberate cancellation/disconnect from a real backend/index failure. */
+export type BigQueryScopeRefreshResult = { readonly ok: true } | { readonly ok: false; readonly cancelled?: true; readonly error?: string }
 
 /** Whether any reported skip covers `scope` (a project-level failure, any dataset failure in a project scope, or the matching dataset). */
 function scopeHasSkip(skipped: readonly ObjectIndexSkip[], scope: BigQueryIndexScope): boolean {
@@ -306,6 +318,9 @@ const noHits = (index: ObjectIndexStatus | undefined): ObjectSearchResult => {
 /** The no-hits answers made up for servers that were not asked: they say nothing about whether the query itself is valid. */
 const unasked = new WeakSet<ObjectSearchResult>()
 
+/** Normalized key for a BigQuery refresh scope (`project\0dataset` or `project`). */
+const scopeKeyOf = (scope: BigQueryIndexScope) => scope.dataset !== undefined ? `${scope.project}\u0000${scope.dataset}` : scope.project
+
 /**
  * Search Objects: builds each connected server's object index in the backend (explorer.index: names, and module definitions
  * unless Options says not to), shows its progress in the status bar, and runs each Search Objects tab's searches
@@ -337,6 +352,9 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly staleAsked = new Map<string, number>()
   /** Builds the user stopped: their CANCELLED answer keeps the stale mark asked, so only a newer mark asks again. */
   private readonly stopping = new Set<string>()
+  /** Each connection's last status read after a stopped build: a reply that is not the latest, or that a build started since, is dropped. */
+  private readonly statusReads = new Map<string, number>()
+  private statusSeq = 0
 
   constructor(private readonly o: ObjectSearchOptions) {
     super({ indexes: {}, documents: {}, paneFocus: 0 })
@@ -365,8 +383,12 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const partial = refresh && !('full' in refresh) ? refresh : undefined
     if (!partial) this.refreshes.delete(connectionId)
     const requestId = this.newId()
+    // A status read still in flight describes the index before this build: its reply must not land over this build's answer.
+    this.statusReads.delete(connectionId)
     const previous = this.getSnapshot().indexes[connectionId]
     const definitions = this.o.settings.get('objectExplorer.search.definitions')
+    // The limit every connection's index shares rides on each build, so a change in Options applies from the next one.
+    const memoryLimitMiB = this.o.settings.get('objectExplorer.search.memoryLimitMiB')
     const allProjects = bigQuery ? this.o.settings.get('objectExplorer.search.bigQueryAccessibleProjects') : undefined
     const maxProjects = bigQuery && allProjects !== false ? this.o.settings.get('objectExplorer.search.bigQueryMaxProjects') : undefined
     const rawStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
@@ -375,7 +397,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       this.indexedStarred.set(connectionId, new Set(starredProjects ?? []))
       this.indexedScopes.delete(connectionId)
     }
-    const scopeKeyOf = (scope: BigQueryIndexScope) => scope.dataset !== undefined ? `${scope.project}\u0000${scope.dataset}` : scope.project
+    if (!partial) this.inFlightFull.add(connectionId)
+    else this.inFlightFull.delete(connectionId)
     if (bigQuery && partial && 'scope' in partial) this.inFlightScope.set(connectionId, scopeKeyOf(partial.scope))
     else this.inFlightScope.delete(connectionId)
     // The billed bulk path: a full BigQuery build with the option on, only after its free estimate and the cost prompts.
@@ -385,7 +408,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     const prompt = previous?.requestId ? this.estimating.get(previous.requestId) : undefined
     if (prompt) prompt.abort()
     else if (bulk && previous?.requestId) void this.o.api.explorerCancel([previous.requestId]).catch(onUnexpectedError)
-    this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...bulk ? { phase: 'estimate' as const } : {}, ...previous?.status ? { status: previous.status } : {} })
+    const checking = !!partial && 'stale' in partial
+    this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: previous?.status?.objects ?? 0, ...bulk ? { phase: 'estimate' as const } : {}, ...checking ? { checking: true as const } : {}, ...previous?.status ? { status: previous.status } : {} })
     const send = (billed: BigQueryBulkIndex | undefined) => {
       // Re-read current starred projects right before sending (stars may have changed while the async estimate/cost prompt ran).
       const liveStarred = bigQuery ? this.o.starredProjects?.(connectionId) : undefined
@@ -399,14 +423,17 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
         finalBulk = locations.length ? { ...finalBulk, locations } : undefined
       }
       void this.o.api.explorerIndex({
-        connectionId, requestId, definitions,
+        connectionId, requestId, definitions, memoryLimitMiB,
         ...allProjects !== undefined ? { allProjects } : {}, ...maxProjects !== undefined ? { maxProjects } : {}, ...currentStarred ? { starredProjects: currentStarred } : {},
-        ...bigQuery && partial ? partial : {}, ...finalBulk ? { bulk: finalBulk } : {}
+        ...partial && (bigQuery || 'stale' in partial) ? partial : {}, ...finalBulk ? { bulk: finalBulk } : {}
       }).then(result => {
         const entry = this.getSnapshot().indexes[connectionId]
         const stopped = this.stopping.delete(requestId)
         if (this.disposed || entry?.requestId !== requestId) return
+        const wasFull = this.inFlightFull.delete(connectionId)
+        const scopeKey = this.inFlightScope.get(connectionId)
         this.inFlightScope.delete(connectionId)
+        let clearedQueue = false
         if (result.ok) {
           if (bigQuery && partial && 'scope' in partial && !scopeHasSkip(result.value.status.skipped, partial.scope)) {
             const scopes = this.indexedScopes.get(connectionId) ?? new Set<string>()
@@ -431,13 +458,31 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
           this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {}, ...failed ? { error: result.error } : {} })
           // Stop (or a disconnect) ends the refreshes waiting behind the build too, and so does a whole build's failure, whose error
           // they would otherwise hide.
-          if (result.code === 'CANCELLED' || failed) this.refreshes.delete(connectionId)
+          if (result.code === 'CANCELLED' || failed) {
+            this.refreshes.delete(connectionId)
+            clearedQueue = true
+          }
           // A stale-only build that did not run its course is asked again at the next hint, unless the user stopped it: Stop waits
           // for a newer mark. A refresh queued behind a build that ended this way is dropped, and so is its mark.
           if (!stopped && (result.code === 'CANCELLED' || failed || (partial && 'stale' in partial))) this.staleAsked.delete(connectionId)
+          // A stopped build keeps what it read, but its CANCELLED answer carries no status: ask for it, or a first build stopped
+          // part way would still say there is no index while the search finds what it read.
+          if (result.code === 'CANCELLED') this.readStatus(connectionId)
         }
+        this.recordBuildOutcome(connectionId, result.ok, wasFull, scopeKey, clearedQueue, result.ok ? undefined : result.error, !result.ok && result.code === 'CANCELLED')
         this.nextRefresh(connectionId)
-      }, onUnexpectedError)
+        if (!this.getSnapshot().indexes[connectionId]?.requestId) this.settleBuildWaiters(connectionId)
+      }, error => {
+        onUnexpectedError(error)
+        const entry = this.getSnapshot().indexes[connectionId]
+        if (!this.disposed && entry?.requestId === requestId) {
+          this.inFlightFull.delete(connectionId)
+          this.inFlightScope.delete(connectionId)
+          this.refreshes.delete(connectionId)
+          this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
+          this.settleBuildWaiters(connectionId, false, error instanceof Error && error.message ? error.message : 'The BigQuery index refresh failed.')
+        }
+      })
     }
     if (!bulk) { send(undefined); return }
     void this.bulkPath(connectionId, requestId, definitions, starredProjects).then(answer => {
@@ -445,14 +490,27 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       if (this.disposed || entry?.requestId !== requestId) return
       if (answer === 'stopped') {
         // Stopped at the estimate or the prompt: nothing was sent, and the index stays as it was.
+        this.inFlightFull.delete(connectionId)
+        this.inFlightScope.delete(connectionId)
         this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
         this.refreshes.delete(connectionId)
         this.stopping.delete(requestId)
+        this.settleBuildWaiters(connectionId, false, undefined, true)
         return
       }
       this.putIndex({ connectionId, requestId, done: 0, total: 0, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
       send(answer)
-    }, onUnexpectedError)
+    }, error => {
+      onUnexpectedError(error)
+      const entry = this.getSnapshot().indexes[connectionId]
+      if (!this.disposed && entry?.requestId === requestId) {
+        this.inFlightFull.delete(connectionId)
+        this.inFlightScope.delete(connectionId)
+        this.refreshes.delete(connectionId)
+        this.putIndex({ connectionId, done: entry.done, total: entry.total, objects: entry.objects, ...entry.status ? { status: entry.status } : {} })
+        this.settleBuildWaiters(connectionId, false, error instanceof Error && error.message ? error.message : 'The BigQuery index refresh failed.')
+      }
+    })
   }
 
   /**
@@ -485,6 +543,72 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private readonly indexedScopes = new Map<string, Set<string>>()
   /** Currently running scoped refresh key per connection, kept separate from completed `indexedScopes`. */
   private readonly inFlightScope = new Map<string, string>()
+  /** Currently running full build per connection. */
+  private readonly inFlightFull = new Set<string>()
+  /** Waiters awaiting completion of a connection's active full build (if any) and their requested BigQuery scopes. */
+  private readonly buildWaiters = new Map<string, Set<{ ok: boolean; cancelled?: boolean; error?: string; readonly awaitFull: boolean; readonly scopes: ReadonlySet<string>; readonly resolve: (outcome: BigQueryScopeRefreshResult) => void }>>()
+
+  private recordBuildOutcome(connectionId: string, ok: boolean, wasFull: boolean, scopeKey: string | undefined, clearedQueue: boolean, error?: string, cancelled?: boolean): void {
+    const waiters = this.buildWaiters.get(connectionId)
+    if (!waiters || ok) return
+    for (const waiter of waiters) {
+      if (clearedQueue || (wasFull && waiter.awaitFull) || (scopeKey !== undefined && waiter.scopes.has(scopeKey))) {
+        waiter.ok = false
+        if (cancelled) waiter.cancelled = true
+        else if (error && !waiter.error) waiter.error = error
+      }
+    }
+  }
+
+  private settleBuildWaiters(connectionId: string, ok = true, error?: string, cancelled?: boolean): void {
+    const waiters = this.buildWaiters.get(connectionId)
+    if (!waiters) return
+    this.buildWaiters.delete(connectionId)
+    for (const waiter of waiters) {
+      if (ok && waiter.ok) {
+        waiter.resolve({ ok: true })
+      } else if (cancelled || waiter.cancelled) {
+        waiter.resolve({ ok: false, cancelled: true })
+      } else {
+        waiter.resolve({ ok: false, error: waiter.error || error || 'The BigQuery index refresh failed.' })
+      }
+    }
+  }
+
+  /**
+   * Re-reads the named BigQuery scopes (or starts a full build if the connection has no ready index yet) and settles
+   * once the active full build (if any) and its requested scopes complete, cancel, stop, or disconnect.
+   */
+  async refreshBigQueryScopes(connectionId: string, scopes: readonly BigQueryIndexScope[]): Promise<boolean> {
+    return (await this.refreshBigQueryScopesOutcome(connectionId, scopes)).ok
+  }
+
+  /** Same as `refreshBigQueryScopes`, returning whether a failure was deliberate cancellation vs a backend/index error. */
+  async refreshBigQueryScopesOutcome(connectionId: string, scopes: readonly BigQueryIndexScope[]): Promise<BigQueryScopeRefreshResult> {
+    const connection = this.o.connections.get(connectionId)
+    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return { ok: false, cancelled: true }
+    const billing = connection.options.provider === 'bigquery' ? connection.options.project : undefined
+    const entry = this.getSnapshot().indexes[connectionId]
+    const requestedScopes = new Set<string>()
+    if (!entry?.requestId && (entry?.error || !entry?.status || entry.status.state === 'none')) {
+      this.build(connectionId)
+      for (const scope of scopes) {
+        if (scope.project !== billing && this.refreshBigQuery(connectionId, { scope })) requestedScopes.add(scopeKeyOf(scope))
+      }
+    } else {
+      for (const scope of scopes) {
+        if (this.refreshBigQuery(connectionId, { scope })) requestedScopes.add(scopeKeyOf(scope))
+      }
+    }
+    const active = this.getSnapshot().indexes[connectionId]
+    if (!active?.requestId) return { ok: false, cancelled: true }
+    const awaitFull = this.inFlightFull.has(connectionId) || active.status?.state === 'building'
+    return new Promise<BigQueryScopeRefreshResult>(resolve => {
+      let set = this.buildWaiters.get(connectionId)
+      if (!set) { set = new Set(); this.buildWaiters.set(connectionId, set) }
+      set.add({ ok: true, awaitFull, scopes: requestedScopes, resolve })
+    })
+  }
 
   /**
    * Re-reads part of a BigQuery connection's index: a project or dataset whole (Object Explorer's Refresh on it), or the datasets
@@ -494,7 +618,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Returns whether the refresh was sent or queued behind the running build. */
   refreshBigQuery(connectionId: string, refresh: BigQueryRefresh): boolean {
     const connection = this.o.connections.get(connectionId)
-    if (this.disposed || !live(connection) || !isBigQueryConnection(connection)) return false
+    // SQL Server takes only a check: its other refreshes are BigQuery's.
+    if (this.disposed || !live(connection) || !isBigQueryConnection(connection) && !('stale' in refresh)) return false
     const entry = this.getSnapshot().indexes[connectionId]
     if (entry?.requestId) {
       if ('scope' in refresh && refresh.missingOnly) {
@@ -568,6 +693,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
    *  server's node re-reads every project. Other nodes leave the index as it is. */
   refreshNode(connectionId: string, ref: ExplorerNodeRef): void {
     const object = ref.type === 'object' ? ref.object : ref.owner
+    const connection = this.o.connections.get(connectionId)
+    if (live(connection) && !isBigQueryConnection(connection)) {
+      // SQL Server: a check of the node's database (or of every database, on the server), whatever its age: a fingerprint each,
+      // and only what changed is read again.
+      const database = object.kind === 'database' ? object.name : object.database
+      this.refreshBigQuery(connectionId, database ? { stale: true, database } : object.kind === 'server' ? { stale: true, checkAll: true } : { stale: true })
+      return
+    }
     if (object.kind === 'server') { this.refreshBigQuery(connectionId, { full: true }); return }
     if (object.kind === 'bqProject' && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.name } })
     else if (object.kind === 'bqDataset' && object.project && object.name) this.refreshBigQuery(connectionId, { scope: { project: object.project, dataset: object.name } })
@@ -577,6 +710,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Stops a running build: what it read so far stays searchable. */
   stopBuild(connectionId: string): void {
     this.refreshes.delete(connectionId)
+    for (const waiter of this.buildWaiters.get(connectionId) ?? []) { waiter.ok = false; waiter.cancelled = true }
     const requestId = this.getSnapshot().indexes[connectionId]?.requestId
     if (requestId) this.stopping.add(requestId)
     if (requestId) this.estimating.get(requestId)?.abort()
@@ -586,6 +720,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   /** Stops every running build (the status bar's Stop). */
   stopAll(): void {
     this.refreshes.clear()
+    for (const waiters of this.buildWaiters.values()) for (const waiter of waiters) { waiter.ok = false; waiter.cancelled = true }
     for (const controller of this.estimating.values()) controller.abort()
     const ids = Object.values(this.getSnapshot().indexes).flatMap(entry => entry.requestId ? [entry.requestId] : [])
     for (const id of ids) this.stopping.add(id)
@@ -839,6 +974,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.indexedStarred.clear()
     this.indexedScopes.clear()
     this.inFlightScope.clear()
+    this.inFlightFull.clear()
     for (const controller of this.estimating.values()) controller.abort()
     this.estimating.clear()
     this.targetBindings.clear()
@@ -846,6 +982,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     this.typing.clear()
     for (const fanout of this.fanouts.values()) fanout.settle()
     this.fanouts.clear()
+    for (const id of [...this.buildWaiters.keys()]) this.settleBuildWaiters(id, false, undefined, true)
     for (const registration of this.registrations.splice(0)) registration.dispose()
     this.clearListeners()
   }
@@ -873,7 +1010,8 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
       ...asked.limit !== undefined ? { limit: asked.limit } : {}
     })
     // A job that ended without its tab (closed, stopped, left running) marked datasets after its run's end: the next search finds them.
-    if (bigQuery) void answer.then(result => { if (result.ok) this.staleHint(connectionId, result.value.index.staleMark) }, () => {})
+    // A SQL Server database or BigQuery dataset the search used that is due for a check (its age, or DDL) names a new mark too.
+    void answer.then(result => { if (result.ok) this.staleHint(connectionId, result.value.index.staleMark) }, () => {})
     return answer
   }
 
@@ -891,7 +1029,7 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
   private staleHint(connectionId: string, mark: number | undefined): void {
     if (mark === undefined || mark <= (this.staleAsked.get(connectionId) ?? 0)) return
     const connection = this.o.connections.get(connectionId)
-    if (!live(connection) || !isBigQueryConnection(connection)) return
+    if (!live(connection)) return
     // Recorded only once a build is sent or queued: a refresh refused now (a failed whole build) is asked again at the next hint.
     if (this.refreshBigQuery(connectionId, { stale: true })) this.staleAsked.set(connectionId, mark)
   }
@@ -1080,12 +1218,14 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     for (const id of [...this.indexedStarred.keys()]) if (!ids.has(id)) this.indexedStarred.delete(id)
     for (const id of [...this.indexedScopes.keys()]) if (!ids.has(id)) this.indexedScopes.delete(id)
     for (const id of [...this.inFlightScope.keys()]) if (!ids.has(id)) this.inFlightScope.delete(id)
+    for (const id of [...this.inFlightFull]) if (!ids.has(id)) this.inFlightFull.delete(id)
     if (gone.length) {
       const kept = { ...indexes }
       // A disconnect closes a bulk build's estimate or cost prompt.
       for (const id of gone) { const requestId = indexes[id]?.requestId; if (requestId) this.estimating.get(requestId)?.abort() }
       for (const id of gone) delete kept[id]
       this.publish({ ...this.getSnapshot(), indexes: kept })
+      for (const id of gone) this.settleBuildWaiters(id, false, undefined, true)
     }
     // A retained single-server tab keeps its filter and completed hits, but no old-handle reply may repopulate it.
     for (const document of Object.values(this.getSnapshot().documents)) {
@@ -1113,10 +1253,28 @@ export class ObjectSearchService extends SnapshotStore<ObjectSearchSnapshot> imp
     }
   }
 
+  /** Reads a connection's index status after a stopped build, unless a newer build or a disconnect came first. */
+  private readStatus(connectionId: string): void {
+    const read = this.o.api.explorerIndexStatus
+    if (!read) return
+    const seq = ++this.statusSeq
+    this.statusReads.set(connectionId, seq)
+    void read({ connectionId }).then(result => {
+      if (this.statusReads.get(connectionId) !== seq) return
+      this.statusReads.delete(connectionId)
+      const entry = this.getSnapshot().indexes[connectionId]
+      if (this.disposed || !result.ok || !entry || entry.requestId || !live(this.o.connections.get(connectionId))) return
+      const { status } = result.value
+      this.putIndex({ connectionId, done: status.indexed, total: status.databases, objects: status.objects, status, ...entry.error ? { error: entry.error } : {} })
+    }, onUnexpectedError)
+  }
+
   private progress(progress: ObjectIndexProgress): void {
     const entry = Object.values(this.getSnapshot().indexes).find(value => value.requestId === progress.requestId)
     if (!entry) return
-    this.putIndex({ ...entry, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {} })
+    const { growing: _growing, throttled: _throttled, savedAt: _savedAt, full: _full, ...rest } = entry
+    this.putIndex({ ...rest, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}, ...progress.growing ? { growing: true } : {}, ...progress.throttled ? { throttled: true } : {},
+      ...progress.savedAt ? { savedAt: progress.savedAt } : {}, ...progress.full ? { full: true } : {} })
   }
 
   private putIndex(entry: IndexEntry): void {

@@ -65,6 +65,25 @@ internal sealed class PackedText : IEquatable<PackedText>
         }
     }
 
+    /// <summary>The frame, for <see cref="IndexFile"/>, which saves it as it is rather than pack the text again.</summary>
+    internal ReadOnlySpan<byte> Frame => frame;
+
+    /// <summary>The most bytes a frame of <paramref name="byteLength"/> bytes of text takes.</summary>
+    internal static long MaxFrameLength(int byteLength) => ZstandardEncoder.GetMaxCompressedLength(byteLength);
+
+    /// <summary>A packed text of a saved frame, or null when the frame is not one <see cref="Unpack"/> can read: it must unpack
+    /// to exactly <paramref name="byteLength"/> bytes of well-formed UTF-8 that are <paramref name="length"/> UTF-16 code units,
+    /// since a search unpacks into buffers of just those sizes. The frame is the text's from here on.</summary>
+    internal static PackedText? FromFrame(byte[] frame, int length, int byteLength, Scratch scratch)
+    {
+        // UTF-8 takes one to three bytes for each UTF-16 code unit.
+        if (length <= 0 || byteLength < length || byteLength > 3L * length || frame.Length == 0 || frame.Length > MaxFrameLength(byteLength)) return null;
+        var bytes = scratch.Bytes(byteLength).AsSpan(0, byteLength);
+        if (!ZstandardDecoder.TryDecompress(frame, bytes, out var written) || written != byteLength) return null;
+        if (!Utf8.IsValid(bytes) || Encoding.UTF8.GetCharCount(bytes) != length) return null;
+        return new PackedText(frame, length, byteLength);
+    }
+
     /// <summary>The text, unpacked into <paramref name="scratch"/>'s buffers (grown as needed): valid until the scratch is used again.</summary>
     public ReadOnlySpan<char> Unpack(Scratch scratch)
     {

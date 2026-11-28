@@ -724,6 +724,20 @@ try {
   await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(floatingEditorGroups(page)).toHaveCount(1)
   await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(1)
+  // A Shift+click in the floated query's text extends its selection, and the float stays put: Dockview moved the whole
+  // float on any Shift-press inside it, taking the pointer from the editor.
+  const floatingWord = floatingEditorGroups(page).locator('.monaco-editor .view-lines').getByText('second', { exact: true })
+  const wordBox = await floatingWord.boundingBox(), floatBefore = await floatingEditorGroups(page).boundingBox()
+  await page.mouse.click(wordBox.x + 1, wordBox.y + wordBox.height / 2)
+  await page.keyboard.down('Shift')
+  await page.mouse.move(wordBox.x + wordBox.width - 1, wordBox.y + wordBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(wordBox.x + wordBox.width + 30, wordBox.y + wordBox.height / 2 + 20, { steps: 4 })
+  await page.mouse.up()
+  await page.keyboard.up('Shift')
+  await expect(floatingEditorGroups(page).locator('.monaco-editor .selected-text').first()).toBeAttached()
+  expect(await floatingEditorGroups(page).boundingBox()).toEqual(floatBefore)
+  await page.keyboard.press('ArrowRight')
   // The dragged float covers the destination's compass. Its content must not steal the drop from the shown target.
   const destinationGroup = editorGroups(page).filter({ has: documentTab(page, firstTab) })
   const destinationBox = await destinationGroup.boundingBox(), titlebar = page.locator('.dv-resize-container').filter({ has: documentTab(page, secondTab) }).locator('.dv-floating-titlebar')
@@ -884,8 +898,7 @@ try {
   await expect(documentTab(page, seventh)).toHaveCount(1)
   await closeDocumentButton(page, seventh).click()
   await expect.poll(async () => (await order()).length).toBe(2)
-  // Dockview floats a group's last tab on a Shift-drag. With every query floating, the empty grid says so and offers
-  // Dock query rather than "No open queries".
+  // With every query floating, the empty grid says so and offers Dock query rather than "No open queries".
   await documentTab(page, secondTab).click({ button: 'right' })
   await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(floatingEditorGroups(page)).toHaveCount(1)
@@ -895,21 +908,29 @@ try {
   await page.keyboard.press('Shift+F10')
   await expect(menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true })).toBeDisabled()
   await page.keyboard.press('Escape')
+  // Nor from a Shift+click, which Dockview floated on the press and which happened by accident: it only chooses the tab.
+  // The float may cover the strip on a small display (Windows CI's 1024x768), so the press goes to the tab itself,
+  // cancelable as a real press is.
+  await selectOpenDocument(page, secondTab)
+  await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
   const firstBox = await documentTab(page, firstTab).boundingBox()
-  await page.keyboard.down('Shift')
-  await page.mouse.move(firstBox.x + 20, firstBox.y + firstBox.height / 2)
-  await page.mouse.down()
-  await page.mouse.move(firstBox.x + 120, firstBox.y + 140, { steps: 6 })
-  await page.mouse.up()
-  await page.keyboard.up('Shift')
-  await expect(floatingEditorGroups(page)).toHaveCount(2)
+  const firstPoint = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: firstBox.x + 20, clientY: firstBox.y + firstBox.height / 2 }
+  await documentTab(page, firstTab).dispatchEvent('pointerdown', { ...firstPoint, bubbles: true, cancelable: true, shiftKey: true, button: 0, buttons: 1 })
+  await page.evaluate(init => { window.dispatchEvent(new PointerEvent('pointerup', { ...init, bubbles: true, shiftKey: true, button: 0, buttons: 0 })) }, firstPoint)
+  await expect.poll(() => activeDocumentName(page)).toBe(firstTab)
+  await expect(floatingEditorGroups(page)).toHaveCount(1)
+  await expect(floatingEditorGroups(page).filter({ has: documentTab(page, firstTab) })).toHaveCount(0)
+  // Dragging the grid's last tab onto the floating group's strip leaves every query floating.
+  const floatingStrip = await editorGroupTabs(floatingEditorGroups(page)).first().boundingBox()
+  await drag(documentTab(page, firstTab), { x: floatingStrip.x + 4, y: floatingStrip.y + floatingStrip.height / 2 })
+  await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(2)
   await expect(page.getByText('All open queries float', { exact: true })).toBeVisible()
   await expect(page.getByText('No open queries', { exact: true })).toHaveCount(0)
-  // The floating groups may cover it: its button works from the keyboard too.
+  // The floating group may cover it: its button works from the keyboard too.
   await page.getByRole('button', { name: 'Dock query', exact: true }).focus()
   await page.keyboard.press('Enter')
-  await expect(floatingEditorGroups(page)).toHaveCount(1)
   await expect(page.getByText('All open queries float', { exact: true })).toHaveCount(0)
+  await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(1)
   const floating = await editorGroupTabs(floatingEditorGroups(page)).first().getAttribute('aria-label')
   await documentTab(page, floating).click({ button: 'right' })
   await menu('Query tab').getByRole('menuitem', { name: 'Dock', exact: true }).click()
@@ -917,8 +938,8 @@ try {
   await expect(editorGroups(page)).toHaveCount(1)
   await selectOpenDocument(page, secondTab)
   await expect.poll(() => activeDocumentName(page)).toBe(secondTab)
-  // At the 16-group cap the grid has no room for an empty group: Shift-dragging its last tab out floats it while the
-  // pointer is down, and it docks again once released. The tab menu (Shift+F10 on a focused tab) works under the floats.
+  // At the 16-group cap the grid has no room for an empty group: the grid's last tab floated by a drag docks again, with
+  // a warning. The tab menu (Shift+F10 on a focused tab) works under the floats.
   const tabMenu = async (tab, item) => {
     await documentTab(page, tab).focus()
     await page.keyboard.press('Shift+F10')
@@ -935,24 +956,22 @@ try {
     await expect(floatingEditorGroups(page)).toHaveCount(index + 1)
   }
   await expect(editorGroups(page)).toHaveCount(16)
-  // The floating groups may cover the grid's strip on a small display (Windows CI's 1024x768), so the Shift-press goes to
-  // the tab itself; Dockview's float then follows the pointer until the window hears it go up.
+  // The floating groups may cover the grid's strip on a small display, so the press goes to the tab itself.
   const lastBox = await documentTab(page, secondTab).boundingBox()
-  const pointer = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: lastBox.x + 20, clientY: lastBox.y + lastBox.height / 2 }
-  await documentTab(page, secondTab).dispatchEvent('pointerdown', { ...pointer, shiftKey: true, button: 0, buttons: 1 })
-  // The float moves with the pointer, and the moves report the layout while the pointer is still down: the cap's dock
-  // must wait for the release (without that wait this check fails every run).
-  await page.evaluate(async init => {
+  const lastPoint = { pointerId: 1, pointerType: 'mouse', isPrimary: true, clientX: lastBox.x + 20, clientY: lastBox.y + lastBox.height / 2 }
+  await documentTab(page, secondTab).dispatchEvent('pointerdown', { ...lastPoint, bubbles: true, cancelable: true, button: 0, buttons: 1 })
+  // Float While Dragging's modifier (Ctrl, ⌘ on macOS) floats it wherever the release lands, even on a float's strip.
+  const floatHeld = process.platform === 'darwin' ? { metaKey: true } : { ctrlKey: true }
+  await page.evaluate(async ({ init, held }) => {
     for (let step = 1; step <= 6; step++) {
-      window.dispatchEvent(new PointerEvent('pointermove', { ...init, bubbles: true, buttons: 1, clientX: init.clientX + step * 20, clientY: init.clientY + step * 25 }))
+      window.dispatchEvent(new PointerEvent('pointermove', { ...init, ...held, bubbles: true, buttons: 1, clientX: init.clientX + step * 20, clientY: init.clientY + step * 25 }))
       await new Promise(resolve => requestAnimationFrame(resolve))
     }
-  }, pointer)
-  await expect(floatingEditorGroups(page)).toHaveCount(16)
-  await page.evaluate(init => { window.dispatchEvent(new PointerEvent('pointerup', { ...init, bubbles: true, button: 0, buttons: 0 })) }, pointer)
+    window.dispatchEvent(new PointerEvent('pointerup', { ...init, ...held, bubbles: true, button: 0, buttons: 0, clientX: init.clientX + 120, clientY: init.clientY + 150 }))
+  }, { init: lastPoint, held: floatHeld })
+  await expect(page.getByText('The query editor shows at most 16 editor groups.', { exact: true })).toBeVisible()
   await expect(floatingEditorGroups(page)).toHaveCount(15)
   await expect(editorGroups(page)).toHaveCount(16)
-  await expect(page.getByText('The query editor shows at most 16 editor groups.', { exact: true })).toBeVisible()
   expect(failures).toEqual([])
   for (const tab of extra) {
     await documentTab(page, tab).focus()
@@ -977,7 +996,7 @@ try {
     return label
   })
   expect(renamed).toBe('After sections')
-  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, compass drops and moves between split tab strips clear both guides and highlights, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, every query floating, and the 16-group cap under a Shift-drag.')
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, compass drops and moves between split tab strips clear both guides and highlights, Join All Editor Groups, Float and Dock, Shift+click selecting in a floated query without moving it, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, a Shift+click that floats nothing, every query floating, and the 16-group cap.')
 
   // A plan panel moves with its Graph / XML choice and edits, while its group borrows the same Monaco editor as a query.
   const planName = 'multiple.sqlplan'

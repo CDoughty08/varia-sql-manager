@@ -337,7 +337,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         budget.CancelAfter(PreConnectLimit);
         try
         {
-            var page = await MetadataAsync(connection, t =>
+            var page = await MetadataAsync(connection, BqMethod.ProjectsList, t =>
             {
                 var request = connection.Client.Service.Projects.List();
                 request.MaxResults = BigQueryLimits.ProjectsPerPage;
@@ -436,7 +436,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         if (BigQueryErrors.IsLegacySql(sql)) throw new RequestException("LEGACY_SQL", BigQueryErrors.LegacySql);
         Exception failure;
         // Connecting already proved bigquery.jobs.create, so a 403 here is about what the query reads: Google's text stays.
-        try { return Estimate(await MetadataAsync(connection, t => DryRunAsync(connection.Client, connection.Options.Project, session?.Location ?? location ?? connection.Location, sql, dataset, t, parameters, session?.Id), token)); }
+        try { return Estimate(await MetadataAsync(connection, BqMethod.JobsInsert, t => DryRunAsync(connection.Client, connection.Options.Project, session?.Location ?? location ?? connection.Location, sql, dataset, t, parameters, session?.Id), token)); }
         // An expired session estimates as a new one would (Execute starts one and says so), without the old temp tables.
         catch (Exception error) when (session is { } held && !token.IsCancellationRequested && SessionGone(error, held.Id))
         {
@@ -456,6 +456,8 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
     public async Task<BigQueryDryRunResult> DryRunQueryAsync(BigQueryDryRunArgs args, CancellationToken token)
     {
         if (string.IsNullOrWhiteSpace(args.Sql) || args.Sql.Length > MaxDryRunCharacters) throw new RequestException("INVALID_PARAMS", "The query text is empty or too long.");
+        if (args.NoDefaultDataset && args.Dataset is not null)
+            throw new RequestException("INVALID_PARAMS", "A dry run cannot name both a dataset and no default dataset.");
         if (args.Dataset is { } dataset && (dataset.Length is 0 or > BigQueryLimits.Dataset || !BigQueryLimits.DatasetId().IsMatch(dataset)))
             throw new RequestException("INVALID_PARAMS", "A dataset name has only letters, numbers and underscores.");
         if (args.SessionId is { } tab && (tab.Length > 36 || !Guid.TryParseExact(tab, "D", out _))) throw new RequestException("INVALID_PARAMS", "The session id is not valid.");
@@ -463,7 +465,7 @@ internal sealed partial class BigQueryService(BigQueryEnvironment environment) :
         // The tab's session when it already has one on this handle: read, never created (an estimate starts no session). A dry
         // run is not a job, so it does not wait in the session's queue.
         (string Id, string? Location)? session = args.SessionId is { } sessionId && FindSession(sessionId) is { Id: { } id } held && held.Connection == connection ? (id, held.Location) : null;
-        var estimate = await EstimateAsync(connection, args.Sql, token, args.Dataset ?? connection.Options.Dataset, session: session);
+        var estimate = await EstimateAsync(connection, args.Sql, token, args.NoDefaultDataset ? null : args.Dataset ?? connection.Options.Dataset, session: session);
         return new(estimate.BytesProcessed, estimate.Incomplete, estimate.StatementType, estimate.Faked);
     }
 

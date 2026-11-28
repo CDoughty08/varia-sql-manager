@@ -291,6 +291,7 @@
     "connection.favoriteForeground": "#d8bf5e",
     "charts.foreground": "#a3a9b5",
     "charts.lines": "#262a31",
+    "charts.canvasDots": "#2e323a",
     "charts.blue": "#3987e5",
     "charts.orange": "#d95926",
     "charts.green": "#199e70",

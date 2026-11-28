@@ -14,8 +14,8 @@ import { connectionPrincipalIdSchema } from './connection-principal'
 import { limits } from '../shared/ipc/wire/protocol'
 import { localTableLimits } from '../shared/results/local-table'
 import { dependenciesParamsSchema, explorerChildrenParamsSchema, peekDefinitionParamsSchema, peekDependenciesParamsSchema, peekParamsSchema } from '../shared/explorer/schema.ts'
-import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectSearchParamsSchema } from '../shared/explorer/search.ts'
-import { languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
+import { bigQueryIndexEstimateRequestSchema, bigQueryIndexEstimateResultSchema, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectSearchLimits, objectSearchParamsSchema } from '../shared/explorer/search.ts'
+import { languageHydrateRequestSchema, languageHydrateResultSchema, languageLookupRequestSchema, languageLookupResultSchema } from '../shared/language-lookup.ts'
 import { scriptRequestSchema } from '../shared/scripting/schema.ts'
 import { actionDescribeSchema, actionExecuteRequestSchema, actionExecuteResultSchema, actionScriptRequestSchema } from '../shared/actions/schema.ts'
 import { ssisCatalogSetupSchema, ssisDescribeSchema, ssisExecuteSchema, ssisExecutionSchema, ssisPackageRunsSchema } from '../shared/ssis/schema.ts'
@@ -117,13 +117,13 @@ export const requestSchemas = {
   'databases.list': z.object({ connectionId }).strict(),
   'tables.columns': z.object({ connectionId, database, schema: name, name }).strict(),
   'query.execute': z.object({
-    connectionId, sessionId: z.uuid(), database: database.optional(), dataset: dataset.optional(), sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
+    connectionId, sessionId: z.uuid(), database: database.optional(), dataset: dataset.optional(), noDefaultDataset: z.literal(true).optional(), sql: z.string().min(1).max(maxScriptCharacters, tooLargeScript), queryId: z.uuid(),
     startLine: z.number().int().min(1).max(1_000_000).optional(), startColumn: z.number().int().min(1).max(1_000_000).optional(),
     maxRows: z.number().int().min(0).max(limits.maxRows), maxResultSets: z.number().int().min(limits.maxResultSets.min).max(limits.maxResultSets.max).optional(),
     timeoutSeconds: z.number().int().min(0).max(86400), stopOnError: z.boolean().optional(), includeActualPlan: z.boolean().optional(), includeClientStatistics: z.boolean().optional(), includeLivePlan: z.boolean().optional(), discardResults: z.boolean().optional(),
     maximumBytesBilled: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER).optional(), prices: z.boolean().optional(), preview: bigQueryPreviewTargetSchema.optional(),
     residence: z.enum(['automatic', 'memory', 'windowed']).optional(), windowCacheMiB: z.number().int().min(16).max(4096).optional(), jobKey: jobKeySchema.optional()
-  }).strict(),
+  }).strict().refine(params => !(params.dataset !== undefined && params.noDefaultDataset), 'A query cannot name both a dataset and no default dataset.'),
   'query.executeMulti': queryExecuteMultiSchema,
   'query.cancel': z.object({ queryId: z.uuid(), detach: z.literal(true).optional() }).strict(),
   // A BigQuery job by its reference (docs/bigquery.md, Re-attaching to jobs); C# checks the bounds again.
@@ -138,6 +138,7 @@ export const requestSchemas = {
   'results.visibility': z.object({ source: z.uuid(), seq: z.number().int().min(1).max(2 ** 31 - 1), visible: z.array(z.number().int().min(1).max(0xffffffff)).max(limits.visibility.maxResults).refine(ids => new Set(ids).size === ids.length, 'Result ids must be distinct.') }).strict(),
   'explorer.children': explorerChildrenParamsSchema,
   'explorer.index': objectIndexParamsSchema,
+  'explorer.indexStatus': objectIndexStatusParamsSchema,
   'explorer.search': objectSearchParamsSchema,
   'explorer.peek': peekParamsSchema,
   'explorer.peekDependencies': peekDependenciesParamsSchema,
@@ -159,7 +160,8 @@ export const requestSchemas = {
   'agent.counterValues': agentCounterValuesSchema,
   'agent.errorLogs': agentErrorLogsSchema,
   'language.parse': languageParseSchema,
-  'language.lookup': languageLookupRequestSchema
+  'language.lookup': languageLookupRequestSchema,
+  'language.hydrate': languageHydrateRequestSchema
 } satisfies Record<RpcMethod, z.ZodType>
 
 /** Databases, or BigQuery's datasets with their locations (BigQueryService.ListDatasetsAsync bounds them the same). */
@@ -207,7 +209,8 @@ export const resultSchemas: Partial<Record<RpcMethod, z.ZodType>> = {
   'agent.counterValues': agentCounterValuesResultSchema,
   'agent.errorLogs': agentErrorLogsResultSchema,
   'language.parse': languageParseResultSchema,
-  'language.lookup': languageLookupResultSchema
+  'language.lookup': languageLookupResultSchema,
+  'language.hydrate': languageHydrateResultSchema
 }
 
 export function validateResult(method: RpcMethod, value: unknown): unknown {
@@ -253,6 +256,19 @@ export const localSaveRequestSchema = z.object({
 /** results.setMemoryLimit, which only main sends (Tools › Options' result memory limit): whole GiB, 0 automatic, at most
  *  1024 as the setting allows. The backend clamps it as at launch (ResultStore.GlobalBytesFor) and checks the same bounds. */
 export const resultsMemoryLimitSchema = z.object({ limitGiB: z.number().int().min(0).max(1024) }).strict()
+/** explorer.indexStore.configure, which only main sends (the saved Search Objects index): the folder is main's own, at most
+ *  2,048 characters; the key is 32 bytes in base64, present exactly when the mode saves; the limit is within the setting's
+ *  bounds. The backend checks all of it again (IndexStore.Configure). */
+export const indexStoreConfigureSchema = z.object({
+  mode: z.enum(['encrypted', 'clearText', 'disabled', 'noKeyStore']),
+  folder: z.string().min(1).max(objectSearchLimits.store.folderChars).refine(value => !value.includes('\0'), 'The folder holds no NUL.'),
+  limitMiB: z.number().int().min(objectSearchLimits.store.diskMiB.min).max(objectSearchLimits.store.diskMiB.max),
+  key: z.base64().length(objectSearchLimits.store.keyChars).refine(value => Buffer.from(value, 'base64').length === 32, 'The key is 32 bytes.').optional()
+}).strict().refine(value => (value.key !== undefined) === (value.mode === 'encrypted' || value.mode === 'clearText'), 'A key comes exactly with a mode that saves.')
+/** Whether the system has a key store, as main tells the page (varia:index-store-storage). */
+export const secretStorageStateSchema = z.object({ available: z.boolean(), reason: z.enum(['no-keyring', 'unknown-backend', 'unavailable']).optional() }).strict()
+/** explorer.indexStore.clear's answer as main hands it to the page: three counts, nothing else. */
+export const indexStoreClearedSchema = z.object({ files: z.number().int().min(0), bytes: z.number().int().min(0), kept: z.number().int().min(0) }).strict()
 /** varia:results-save. The name only suggests the file; the path comes from main's save dialog. `suggestedSuffix`, the end
  *  of the name that tells results apart ('-Result2-Pivot'), is kept whole when main shortens the name. */
 export const resultsSaveRequestSchema = z.object({ jobId: z.uuid(), generation: u31, resultId: u32, format: z.enum(['csv', 'tsv', 'json']).optional(), suggestedName: z.string().min(1).max(limits.jobs.suggestedName), suggestedSuffix: z.string().min(1).max(limits.jobs.suggestedName).optional(), viewId: u32.optional(), ...turned }).strict().refine(...turnedRule)

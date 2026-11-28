@@ -74,9 +74,15 @@ export const contrastPairs: readonly ContrastPair[] = [
   ...text(['menu.selectionForeground'], ['menu.background', 'menu.selectionBackground']),
   // Keybinding labels in menus; the highlighted item shows them in menu.selectionForeground.
   ...text(['descriptionForeground'], ['menu.background']),
-  // The status bar Memory panel (a menu surface): a result's Raw and Packed state chips in Nerd metrics.
+  // The status bar Memory panel and IntelliSense popover (menu surfaces): raw/packed chips, status pills, action buttons, and budget progress bar.
   ...text(['memoryPanel.rawForeground'], ['menu.background', 'memoryPanel.rawBackground']),
   ...text(['memoryPanel.packedForeground'], ['menu.background', 'memoryPanel.packedBackground']),
+  ...statusTones.flatMap(tone => text([toneKeys(tone).foreground], ['menu.background', toneKeys(tone).background])),
+  ...text(['button.foreground'], ['menu.background', 'button.background'], ['menu.background', 'button.hoverBackground']),
+  ...text(['button.secondaryForeground'], ['menu.background']),
+  ...text(['button.secondaryHoverForeground'], hovered('menu.background')),
+  ...restingOutline(['button.border'], ['menu.background']),
+  ...graphic(['focusBorder', 'warningForeground', 'errorForeground'], ['menu.background', 'badge.background']),
   ...text(['input.foreground', 'input.placeholderForeground'], input),
   ...text(['badge.foreground', 'errorForeground'], ['panelTitle.background', 'badge.background']),
   // The kind badges of Search Objects results: the letters on each tone.

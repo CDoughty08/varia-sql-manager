@@ -1,0 +1,161 @@
+import { describe, expect, it } from 'vitest'
+import { stepsFlow } from '../src/shared/agent/flow'
+import { currentStepSeconds, lastRunDrawing, liveRunDrawing, nextWords, runPasses, runStepIndex } from '../src/shared/agent/flow-run'
+import type { JobHistoryStep } from '../src/shared/agent/job-history'
+import { newStepDraft, type AgentStepDraft, type AgentStepsDraft, type StepAction } from '../src/shared/agent/steps'
+
+// The fake backend's flow-run Nightly (tests/fixtures/backend.mjs › agent-flow-runs): 1 ✓ next ✗ quit failure; 2 ✓ next ✗ go to 1;
+// 3 ✓ quit success ✗ go to 4; 4 quits reporting failure either way.
+type Go = 'next' | 'qs' | 'qf' | number
+const code = (go: Go): StepAction => go === 'next' ? 3 : go === 'qs' ? 1 : go === 'qf' ? 2 : 4
+function job(steps: readonly [string, Go, Go][]): AgentStepsDraft {
+  const drafted = steps.map(([name, ok, fail], at): AgentStepDraft => ({
+    ...newStepDraft([]), key: `s${at + 1}`, from: at + 1, name, onSuccess: code(ok), onFail: code(fail),
+    ...typeof ok === 'number' ? { onSuccessTarget: `s${ok}` } : {}, ...typeof fail === 'number' ? { onFailTarget: `s${fail}` } : {}
+  }))
+  return { steps: drafted, startKey: 's1' }
+}
+const nightly = () => job([['Check integrity', 'next', 'qf'], ['Rebuild indexes', 'next', 1], ['Update statistics', 'qs', 4], ['Notify operators', 'qf', 'qf']])
+let instance = 0
+const row = (stepId: number, name: string, outcome: string, started: string, seconds?: number): JobHistoryStep => ({
+  instance: ++instance, stepId, name, outcome, started, ...seconds !== undefined ? { seconds } : {}, duration: '', retries: 0, message: `${name}: ${outcome}`,
+  tone: outcome === 'Failed' ? 'error' : outcome === 'Retry' ? 'muted' : 'ok'
+})
+// The newest failed run: 1 retried once then ✓, 2 ✗ back to 1, 1 ✓, 2 ✓, 3 ✗ to 4, 4 ✓ (which quits reporting failure).
+const failedRun = () => [
+  row(1, 'Check integrity', 'Retry', '2026-11-09 02:00:00', 4), row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:34', 6),
+  row(2, 'Rebuild indexes', 'Failed', '2026-11-09 02:00:40', 20), row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:01:00', 5),
+  row(2, 'Rebuild indexes', 'Succeeded', '2026-11-09 02:01:05', 55), row(3, 'Update statistics', 'Failed', '2026-11-09 02:02:00', 3),
+  row(4, 'Notify operators', 'Succeeded', '2026-11-09 02:02:03', 1), row(0, '(Job outcome)', 'Failed', '2026-11-09 02:00:00', 124)
+]
+
+describe('the Flow view\'s run overlays', () => {
+  it('reads a run\'s rows as passes: retries with their step, the job row left out, loops as more than one pass', () => {
+    const passes = runPasses([...failedRun()].reverse(), nightly().steps)
+    expect(passes.map(pass => `${pass.at}${pass.tone}`)).toEqual(['0ok', '1bad', '0ok', '1ok', '2bad', '3ok'])
+    expect(passes[0]).toMatchObject({ retries: 1, seconds: 10, outcome: 'Succeeded' })
+    expect(passes[1]!.retries).toBe(0)
+  })
+  it('leaves out a running step\'s trailing retries, and a pass with a row of no duration has none', () => {
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00'), row(2, 'Rebuild indexes', 'Retry', '2026-11-09 02:00:10', 3)]
+    const passes = runPasses(rows, nightly().steps)
+    expect(passes).toHaveLength(1)
+    expect(passes[0]!.seconds).toBeUndefined()
+  })
+  it('matches history to the draft by a name one step has, else by the saved id', () => {
+    const steps = [{ from: 1, name: 'A' }, { from: 2, name: 'B' }, { from: 3, name: 'B' }]
+    expect(runStepIndex(steps, { stepId: 9, name: 'A' })).toBe(0)
+    expect(runStepIndex(steps, { stepId: 3, name: 'B' })).toBe(2)
+    expect(runStepIndex(steps, { stepId: 2, name: 'Renamed' })).toBe(1)
+    expect(runStepIndex(steps, { stepId: 7, name: 'Gone' })).toBe(-1)
+  })
+  it("places a deleted middle step's passes nowhere, though its saved id now belongs to the step after it", () => {
+    // Rebuild indexes (step 2) was deleted and saved: msdb renumbered Update statistics to 2 and Notify operators to 3.
+    const after = job([['Check integrity', 'next', 'qf'], ['Update statistics', 'qs', 3], ['Notify operators', 'qf', 'qf']])
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Rebuild indexes', 'Failed', '2026-11-09 02:00:01', 1),
+      row(3, 'Update statistics', 'Succeeded', '2026-11-09 02:00:02', 1)]
+    const passes = runPasses(rows, after.steps)
+    expect(passes.map(pass => pass.at)).toEqual([0, -1, 1])
+    const drawing = lastRunDrawing(stepsFlow(after), passes, true)
+    expect(drawing.unplaced).toBe(1)
+    expect(drawing.steps[1]!.right.map(part => part.text)).toEqual(['✓ 00:00:01'])
+  })
+  it("lists a loop's last passes on the node with ×N, and every pass in the step's words for a screen reader", () => {
+    const rows = [1, 2, 3].flatMap(n => [row(1, 'Check integrity', 'Succeeded', `2026-11-09 02:0${n}:00`, n), row(2, 'Rebuild indexes', 'Failed', `2026-11-09 02:0${n}:10`, 1)])
+    const drawing = lastRunDrawing(stepsFlow(nightly()), runPasses(rows, nightly().steps), false)
+    expect(drawing.steps[0]!.right.map(part => part.text)).toEqual(['×3', '…', '✓ 00:00:02', '✓ 00:00:03'])
+    expect(drawing.steps[0]!.spoken).toBe('ran 3 times: succeeded in 00:00:01, then succeeded in 00:00:02, then succeeded in 00:00:03')
+    expect(drawing.steps[2]!.spoken).toBe('not run')
+    const retried = runPasses([row(1, 'Check integrity', 'Retry', '2026-11-09 02:00:00', 4), row(1, 'Check integrity', 'Failed', '2026-11-09 02:00:34', 6)], nightly().steps)
+    expect(lastRunDrawing(stepsFlow(nightly()), retried, true).steps[0]!.spoken).toBe('failed in 00:00:10 after 1 retry')
+  })
+  it("draws a run whose rows History cut short: no last edge, and the steps past the rows read not known rather than Not run", () => {
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Rebuild indexes', 'Succeeded', '2026-11-09 02:00:01', 1)]
+    const drawing = lastRunDrawing(stepsFlow(nightly()), runPasses(rows, nightly().steps), true, true)
+    expect([...drawing.hot]).toEqual(['0:success'])
+    expect(drawing.steps[2]).toMatchObject({ fade: true, right: [{ text: '—' }] })
+    expect(drawing.steps[3]!.spoken).toBe('not known: past the rows History reads')
+  })
+  it('draws Run: the path bold and numbered, an edge taken twice numbered twice, the last pass to its quit', () => {
+    const flow = stepsFlow(nightly())
+    const drawing = lastRunDrawing(flow, runPasses(failedRun(), nightly().steps), true)
+    expect([...drawing.hot].sort()).toEqual(['0:success', '1:fail', '1:success', '2:fail', '3:success'])
+    expect(Object.fromEntries(drawing.sequence)).toEqual({ '0:success': '1 · 3', '1:fail': '2', '1:success': '4', '2:fail': '5' })
+    expect(drawing.steps[0]!.right.map(part => part.text)).toEqual(['1 retry', '×2', '✓ 00:00:10', '✓ 00:00:05'])
+    expect(drawing.steps[1]!.right.map(part => part.text)).toEqual(['×2', '✗ 00:00:20', '✓ 00:00:55'])
+    expect(drawing.steps[2]).toMatchObject({ fade: false, right: [{ text: '✗ 00:00:03', tone: 'bad' }] })
+    expect(drawing.unplaced).toBe(0)
+  })
+  it('fades the steps a run never reached, leaves off an edge the draft has changed since, and counts passes of deleted steps', () => {
+    const changed = job([['Check integrity', 'next', 'qf'], ['Rebuild indexes', 'qs', 1], ['Update statistics', 'qs', 4], ['Notify operators', 'qf', 'qf']])
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Rebuild indexes', 'Succeeded', '2026-11-09 02:00:01', 1),
+      row(3, 'Update statistics', 'Succeeded', '2026-11-09 02:00:02', 1), row(8, 'Dropped step', 'Succeeded', '2026-11-09 02:00:03', 1)]
+    const drawing = lastRunDrawing(stepsFlow(changed), runPasses(rows, changed.steps), true)
+    expect(drawing.hot.has('1:success')).toBe(false)
+    expect(drawing.hot.has('0:success')).toBe(true)
+    expect(drawing.steps[3]).toMatchObject({ fade: true, right: [{ text: 'Not run' }] })
+    expect(drawing.unplaced).toBe(1)
+  })
+  it("draws a cut job's path on to its Step N · not read pill, and says where the last read step goes next", () => {
+    // Varia reads two of this job's steps: step 2's Go to the next step leads past them, to step 3.
+    const cut = job([['Extract', 'next', 'qf'], ['Load', 'next', 'qf']])
+    const flow = stepsFlow(cut, true)
+    const rows = [row(1, 'Extract', 'Succeeded', '2026-11-09 02:00:00', 1), row(2, 'Load', 'Succeeded', '2026-11-09 02:00:01', 1), row(3, 'Publish', 'Succeeded', '2026-11-09 02:00:02', 1)]
+    const drawing = lastRunDrawing(flow, runPasses(rows, cut.steps), true)
+    expect([...drawing.hot].sort()).toEqual(['0:success', '1:success'])
+    expect(Object.fromEntries(drawing.sequence)).toEqual({ '0:success': '1', '1:success': '2' })
+    expect(nextWords(flow, 1, 'success')).toBe('step 3, past the steps Varia reads')
+    // A run whose next step was some other unread step did not take that go-to.
+    const other = lastRunDrawing(flow, runPasses([...rows.slice(0, 2), row(9, 'Archive', 'Succeeded', '2026-11-09 02:00:02', 1)], cut.steps), true)
+    expect(other.hot.has('1:success')).toBe(false)
+  })
+  it('draws Live run: the current step ringed with its time, usual and bar, both its edges lit, the rest Waiting or On failure only', () => {
+    const flow = stepsFlow(nightly())
+    const passes = runPasses([row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 4)], nightly().steps)
+    const drawing = liveRunDrawing(flow, passes, { at: 1, retrying: false, seconds: 30, usual: 60 }, true)
+    expect(drawing.steps[1]).toMatchObject({ current: true, bar: 0.5, right: [{ text: '▶ 00:00:30', tone: 'run' }, { text: 'usual 00:01:00' }] })
+    expect([...drawing.lit].sort()).toEqual(['1:fail', '1:success'])
+    expect([...drawing.hot]).toEqual(['0:success'])
+    expect(drawing.sequence.get('0:success')).toBe('1')
+    expect(drawing.steps[2]!.right[0]!.text).toBe('Waiting')
+    expect(drawing.steps[3]!.right[0]!.text).toBe('On failure only')
+    const unknown = liveRunDrawing(flow, passes, { at: 1, retrying: true }, false)
+    expect(unknown.steps[1]!.right[0]!.text).toBe('▶ Between retries')
+    expect(unknown.steps[0]).toMatchObject({ fade: true, right: [{ text: '—' }] })
+    expect(unknown.hot.size).toBe(0)
+    // Step 2 again after failing back to step 1: its failed pass stays before the running one.
+    const again = runPasses([row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 4), row(2, 'Rebuild indexes', 'Failed', '2026-11-09 02:00:04', 9), row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:13', 5)], nightly().steps)
+    expect(liveRunDrawing(flow, again, { at: 1, retrying: false, seconds: 4 }, true).steps[1]!.right.map(part => part.text)).toEqual(['✗ 00:00:09', '▶ 00:00:04'])
+  })
+  it('classifies live-run pending steps from the current step after a failure branch, marking skipped and unreachable steps Not run', () => {
+    // 1 ✓ -> 2, ✗ -> 3; 2 ✓ -> qs; 3 ✓ -> 4, ✗ -> qf; 4 ✓ -> qs; 5 unreachable.
+    const branched = job([['Step 1', 2, 3], ['Step 2', 'qs', 'qf'], ['Step 3', 4, 'qf'], ['Step 4', 'qs', 'qf'], ['Orphan', 'qs', 'qf']])
+    const passes = runPasses([row(1, 'Step 1', 'Failed', '2026-11-09 02:00:00', 2)], branched.steps)
+    const drawing = liveRunDrawing(stepsFlow(branched), passes, { at: 2, retrying: false, seconds: 5 }, true)
+    expect(drawing.steps[0]!.right[0]!.text).toBe('✗ 00:00:02')
+    expect(drawing.steps[1]).toMatchObject({ fade: true, right: [{ text: 'Not run' }], spoken: 'not run' })
+    expect(drawing.steps[2]).toMatchObject({ current: true })
+    expect(drawing.steps[3]).toMatchObject({ fade: true, right: [{ text: 'Waiting' }], spoken: 'waiting' })
+    expect(drawing.steps[4]).toMatchObject({ fade: true, right: [{ text: 'Not run' }], spoken: 'not run' })
+    // When the live step is unplaced (at < 0) after a pass already ran, remaining steps are not yet known rather than Not run.
+    const unplaced = liveRunDrawing(stepsFlow(branched), passes, { at: -1, retrying: false }, true)
+    expect(unplaced.steps[0]!.right[0]!.text).toBe('✗ 00:00:02')
+    expect(unplaced.steps[1]).toMatchObject({ fade: true, right: [{ text: '—' }], spoken: 'not known yet' })
+    expect(unplaced.steps[2]).toMatchObject({ fade: true, right: [{ text: '—' }], spoken: 'not known yet' })
+  })
+  it('says where the current step goes next, and how long it has run from the server\'s clock', () => {
+    const flow = stepsFlow(nightly())
+    expect(nextWords(flow, 1, 'success')).toBe('step 3')
+    expect(nextWords(flow, 0, 'fail')).toBe('quit reporting failure')
+    expect(nextWords(flow, 2, 'success')).toBe('quit reporting success')
+    expect(nextWords(stepsFlow(job([['A', 'next', 'qf']])), 0, 'success')).toBe('the end (the job fails)')
+    const rows = [row(1, 'Check integrity', 'Succeeded', '2026-11-09 02:00:00', 10)]
+    expect(currentStepSeconds(rows, 20261109020000, 20261109020025)).toBe(15)
+    expect(currentStepSeconds([], 20261109020000, 20261109020025)).toBe(25)
+    expect(currentStepSeconds([], undefined, 20261109020025)).toBeUndefined()
+    expect(currentStepSeconds(rows, 20261109020000, undefined)).toBeUndefined()
+    // Without this run's rows, step 3's time is not the job's whole elapsed time.
+    expect(currentStepSeconds([], 20261109020000, 20261109021240, false, 3)).toBeUndefined()
+    expect(currentStepSeconds([], 20261109020000, 20261109020025, false, 1)).toBe(25)
+  })
+})

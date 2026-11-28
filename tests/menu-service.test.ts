@@ -544,6 +544,15 @@ describe('context menus', () => {
     menus.openFromEvent(event(one.button))
     fake.fire('scroll', { target: strip.dom })
     expect(menus.ownsKeyboard()).toBe(true)
+    // A pre-open viewport scroll dispatches on `document` on the next frame: ignore it while the viewport has not moved since.
+    const root = Object.assign(new FakeElement(doc, 'html'), { scrollTop: 0, scrollLeft: 240 })
+    Object.assign(doc, { scrollingElement: root.dom })
+    menus.openFromEvent(event(one.button))
+    fake.fire('scroll', { target: doc as unknown as EventTarget })
+    expect(menus.ownsKeyboard()).toBe(true)
+    root.scrollLeft = 280
+    fake.fire('scroll', { target: doc as unknown as EventTarget })
+    expect(menus.ownsKeyboard()).toBe(false)
   })
   it('opens a results grid\'s menu from the keyboard below its active cell, with focus in the grid', () => {
     const { menus, doc, first } = setup()

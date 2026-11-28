@@ -177,10 +177,13 @@ BigQuery's rule refuses are dropped, and a location that is not a location id is
 ## Execution
 
 `query.execute` on a BigQuery handle runs the editor's text as one query job (`SqlService.BigQueryExecution.cs`). It
-takes an optional `dataset` (the query's default dataset; the connection's when absent) and ignores `database`. SQL
-Server's options (stop on error, actual and live plans, client statistics) are refused with `UNSUPPORTED_PROVIDER`, in
-main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A BigQuery query tab sends its dataset (when it has one)
-and leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens Connect and, once the
+takes an optional `dataset` (the query's default dataset; the connection's when absent) or `noDefaultDataset: true`
+(explicitly clears the connection's default dataset; mutually exclusive with `dataset` and refused on SQL Server) and
+ignores `database`. SQL Server's options (stop on error, actual and live plans, client statistics) are refused with
+`UNSUPPORTED_PROVIDER`, in main and in the backend, and `#legacySQL` is refused with `LEGACY_SQL` before any job. A
+BigQuery query tab sends its dataset (or `noDefaultDataset: true` when the user cleared the connection's default) and
+leaves out SQL Server's options whatever the tab and Tools › Options hold. Execute on a tab with no connection opens
+Connect and, once the
 connection is ready, runs the query as a SQL Server tab does, through the same estimate and cost prompt. A restored tab whose job has
 not re-attached yet only attaches, so that job's session and results come back first; Execute then runs as usual.
 
@@ -231,6 +234,20 @@ final listing says that earlier statements' results may be missing and leaves th
 it. Early results show while the script runs. A listing that fails between polls stops the early reads (`jobs.list`
 needs `bigquery.jobs.list`, which the Job User role lacks); a final listing that fails shows only the last statement's
 rows and says so. A failing statement names its editor position and how many statements before it ran and were billed.
+
+### Named result sets
+
+BigQuery queries and scripts support `#Name="…"` marker comments just before a query statement (`SELECT`, `WITH`, `FROM`
+pipe syntax, or a parenthesized query) without altering the SQL sent to BigQuery
+([Named result sets › BigQuery](named-result-sets-scope.md#bigquery-googlesql)). Markers work in `-- #Name="…"`,
+`/* #Name="…" */`, `# #Name="…"` and bare `#Name="…"` comments (requiring `=` after `#Name`, so `#Names` and prose
+comments like `#Name: orders` are ignored). Single queries keep their name whether in memory, read via Storage Read,
+windowed in BigQuery, loaded into memory, re-run in place, or re-attached via `query.attach`. Multi-statement scripts
+match child jobs using `statistics.scriptStatistics.stackFrames` (`startLine`/`startColumn`, without keeping child SQL
+text), with a safe positional fallback when stack frames are absent and no control-flow or dynamic statement precedes the
+query. Markers on or inside `IF`, `LOOP`, `WHILE`, `REPEAT`, `FOR`, `BEGIN … END`, `CASE`, `CALL` or `EXECUTE IMMEDIATE`,
+on non-result statements, on oversized scripts (> 262,144 characters), or when child jobs cannot be listed leave the
+result unnamed and emit bounded informational notes in Messages (up to 20 per run).
 
 ### Sessions
 
@@ -296,7 +313,8 @@ Stop pressed while a restart waits for idle sessions to end reaches the backend 
   job's record, which would otherwise come back at every restore.
 - **`query.attach`** re-attaches a tab to a job by reference (`jobId`, `project`, `location?`), as a query: it first checks
   that the connection's principal created the job (`jobs.get`, then a free `jobs.list` over its creation time must name
-  it; `AUTH_IDENTITY` otherwise, and the job is left alone). The listing needs `bigquery.jobs.list` (BigQuery User has
+  it; `AUTH_IDENTITY` otherwise, and the job is left alone; a VPC Service Controls refusal of either call is that
+  `PERMISSION_DENIED` instead, which keeps the job to re-attach to). The listing needs `bigquery.jobs.list` (BigQuery User has
   it, Job User does not): without it a re-attach answers `PERMISSION_DENIED` naming the permission and leaves the job
   running, except to a job the tab's session inserted in this backend. A running job shows "Re-attached to BigQuery job … started N
   ago" and Stop cancels it (a Stop during the identity check cancels it once the check passes; when the check or the
@@ -391,11 +409,12 @@ type.
   sends.
 - **Fallback.** When a session cannot be opened, REST reads the result and the Messages tab says why once per
   connection, starting "Large results are read through the BigQuery API, which is slower:": the Storage API is disabled
-  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), Google could not
+  in the project or the credential lacks `bigquery.readsessions.create` (the connection stops asking), VPC Service
+  Controls blocks the Storage API (asked again on the next query, which passes once back inside the perimeter), Google could not
   be reached (a proxy or firewall may block `bigquerystorage.googleapis.com` over HTTP/2; the connection reads through
   REST for ten minutes before trying again), or Google refused the session or sent columns that are not the result's
   (asked again on the next query). Any other failure while deciding also leaves the result to REST. A stream that fails after reading has begun
-  fails the query (`CONNECTION_LOST` or `BACKEND_ERROR`), as a REST page would.
+  fails the query with the error a REST page would give (for example `CONNECTION_LOST`, `AUTH_EXPIRED`, `REMOTE_EXPIRED`, `PERMISSION_DENIED`, including the VPC Service Controls refusal, or `BACKEND_ERROR`).
 - **Proxy.** The gRPC channel uses the system proxy with HTTP CONNECT, like REST: on Windows and macOS the system's
   settings, on Linux `HTTPS_PROXY`/`ALL_PROXY` and `NO_PROXY`. The proxy must pass HTTP/2 through.
 
@@ -649,10 +668,19 @@ listers; nothing in it runs a job.
 - **Paging and limits.** Lists page with BigQuery's own page tokens (carried in the cursor as base64url), Columns by offset;
   each listing has a 30 s budget, and a failure is the row's error, as SQL Server's are. Names a kind's rule refuses are
   dropped, so they never reach a menu or a script.
-- **Rate limiter.** Every metadata read (listers, Preview Rows, Properties, Script As' `tables.get` and `routines.get`) goes
-  through one limiter per principal: at most 16 calls in flight across all of the principal's connections, since BigQuery's
-  per-user API limits count the principal. A rate-limit refusal (429, or 403 `rateLimitExceeded`) retries with jittered
-  backoff until the call's deadline; other transient failures retry a few times; anything else answers at once.
+- **Rate limiter.** Every metadata read (listers, the Search Objects index, Preview Rows, Properties, Script As, Job History,
+  dry runs for cost estimates) goes through one limiter per principal (`BigQueryRateLimiter`), set to BigQuery's API (core)
+  system limits, which count the user across all connections and clients. Each REST method goes at most 100 requests a
+  second (`projects.list` 10), evenly spaced with no burst on top, so no one-second window holds more while slots are free. At most 250 calls
+  are in flight across all methods, leaving the rest of BigQuery's 300 for queries. A call waits for its method's turn
+  first, then a slot, so a method running at its rate never holds slots another method needs. A call whose deadline ends
+  while it waits for either gives its turn back. A rate-limit refusal (429, or 403 `rateLimitExceeded`) halves that
+  method's rate, at most once a second (a burst of refusals from calls already in flight counts once), but never below
+  a tenth of the full rate. The rate then climbs back by a tenth of the full rate each second. The call retries with
+  jittered backoff until its deadline, holding no slot while it waits. For 5 s after any refusal the principal counts as
+  rate limited, whichever method was refused, and the index's status says so. Other transient failures retry a few
+  times; anything else answers at once. Query execution, result reads and Storage Read have their own
+  backoff and do not go through this limiter.
 - **Names in SQL.** BigQuery has no `QUOTENAME` and takes no identifier as a parameter, so a name reaches SQL text only through
   `BqNames` (C#): its kind's rule (the same as `src/shared/bigquery/names.ts`), then backticks with backslashes and backticks
   escaped. A name the rule refuses throws `INVALID_PARAMS` before any text is built. Values are always query parameters.
@@ -762,7 +790,11 @@ run a billed query). Dataset and routine names are validated through `BqNames` i
 facts are left out and values are clipped at 2,000 characters without splitting surrogate pairs.
 
 Refresh on a project or dataset node also re-reads it in the Search Objects index, on a node below a dataset that dataset,
-and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)).
+and on the connection's node the whole index ([Search Objects › BigQuery](object-search.md#bigquery)). GoogleSQL IntelliSense
+ranks indexed projects **Billing → ★ Starred → Recently Queried → Discovered**, supports cross-project fuzzy table jump on
+`FROM` (2+ characters), auto-hydrates Wave-3-pending or memory-capped tables on demand via free `tables.get` / `routines.get`
+(`textEditor.googleSql.jitHydrate`, on by default), and offers one-click **Fetch schema (free)** and **★ Star project** on
+unstarred external projects ([Completion from the index](language-services.md#completion-from-the-index)).
 
 ## Job History
 
@@ -784,7 +816,9 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 - **Scope.** My jobs (the default) lists the principal's jobs. All users lists the project's (`allUsers`): it needs
   `bigquery.jobs.list` (BigQuery User), and without `bigquery.jobs.listAll` BigQuery leaves out other users' configuration,
   so such a row says "Details hidden by BigQuery" in place of its SQL. A refused All users listing turns the toggle back
-  to My jobs, says why, and keeps it off for the connection. In All users a second, minimal listing without `allUsers`
+  to My jobs, says why, and keeps it off for the connection; a VPC Service Controls refusal is no missing permission and
+  fails the listing with its own error, as it fails a pinned job's or a script's children's read instead of leaving them
+  out. In All users a second, minimal listing without `allUsers`
   marks the principal's own jobs (never an email comparison).
 - **Listing and refresh.** The newest 1,000 top-level jobs in the range, newest first, in pages of 100 with `projection=full`;
   each job's SQL is cut to a one-line, 200-character preview as its page is read, and a refresh reads at most 10 MiB of
@@ -835,8 +869,10 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
     cost prompts. **Re-attach** on a running one does the same and adopts its session, so Stop cancels it. A tab that
     already holds the job is focused instead. Both need the job's creator, who alone can read its result table.
   - **Open SQL in New Tab** and **Re-run** open the job's whole SQL in a new query tab on the connection, with the job's
-    default dataset when it is in the billing project; Re-run then executes it with the usual cost prompts, unless the SQL
-    was longer than Varia reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
+    default dataset when it is in the billing project. When the job's default dataset lived in another project, the tab
+    opens with no default dataset and a notice instead of executing, so unqualified table names never fall back to the
+    connection's dataset; otherwise Re-run executes it with the usual cost prompts, unless the SQL was longer than Varia
+    reads. Re-run asks first, naming the job, for anything but a SELECT (DML, DDL such as DROP TABLE
     or CREATE OR REPLACE TABLE, a script, or a statement BigQuery did not name) and when another user ran it (it runs as you); the cost prompts name the job too
     ("Re-run this job?"). Re-run and Cancel Job are not in the palette, where their words would outrank Execute and
     Cancel Executing Query.
@@ -862,7 +898,8 @@ without going to BigQuery Studio. Everything comes from BigQuery's free REST cal
 | `AUTH_EXPIRED` | A refused refresh (`invalid_grant`) of a user sign-in, HTTP 401, or no credentials at all | "Your Google sign-in has expired." or "No Google credentials were found.", with `gcloud auth application-default login` |
 | `AUTH_KEY_FILE` | A key or configuration file Varia cannot read or use, a refused shape, a deleted key (`invalid_grant` for a service account), a federated token Google's STS refuses (`invalid_grant` in federation mode), an unreadable subject token | Names the rule or field; choose the file again |
 | `AUTH_IDENTITY` | The credential now signs in as another principal | Reconnect to use the new account |
-| `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect) and the project |
+| `PERMISSION_DENIED` | `accessDenied` or HTTP 403 | Names the missing permission (`bigquery.jobs.create` for connect, with BigQuery Job User; `bigquery.datasets.get` for Test Connection) and the project, then Google's own text (left out of Search Objects skips, which name no object). projects.list needs no single permission, so its refusal names none |
+| `PERMISSION_DENIED` (VPC Service Controls) | `accessDenied`, HTTP 403 or a Storage API `PermissionDenied` whose message opens "VPC Service Controls:" or "Request is prohibited by organization's policy", or whose details hold an `ErrorInfo` with reason `SECURITY_POLICY_VIOLATED` or a `PreconditionFailure` violation of type `VPC_SERVICE_CONTROLS` | "VPC Service Controls blocked this request…": connect from inside the perimeter or ask an administrator, with Google's identifier for the audit log (left out when longer than 128 characters), never a guessed permission and no project, since the blocked resource may be another's. Job History adds no permission advice to it, and an Object Explorer node it refused keeps Retry |
 | `API_DISABLED` | `accessNotConfigured`, `SERVICE_DISABLED` | Enable the BigQuery API in the Google Cloud console |
 | `BILLING_DISABLED` | `billingNotEnabled` | Explains the sandbox limits |
 | `QUOTA` | `quotaExceeded`, `rateLimitExceeded`, HTTP 429 | Which kind, with Google's text |
@@ -984,7 +1021,9 @@ and TIME columns, writes BYTES base64-encoded twice and exits on ARRAY columns; 
   Copy of a whole column across blocks, Save Results As streaming every row, Load into memory in place, and Automatically,
   by size keeping the same small result in memory. `scripts/bigquery-explorer-smoke.mjs` drives Object Explorer against the
   same fake with `objects` (a table, a view, a routine and a model): the folders and objects, Columns with a STRUCT's
-  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties.
+  fields, Preview Rows with no job, a view's menu without Preview Rows, Script View as › SELECT To and Properties; then, after a
+  backend restart, a search finds the saved index's objects while the dataset's `tables.list` is held, with no
+  object's details read again (docs/object-search.md, Reloading a BigQuery index).
 - **Throughput.** `-- --bigquery-read-bench [--rows N] [--runs N]` times `query.execute` reading the same rows through
   REST and through Storage Read (four streams and one; uncompressed, LZ4 and Zstandard) against the offline fakes, so
   it measures decoding and storing, not the network or the fakes (the REST fake serializes each page once, and the

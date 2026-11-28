@@ -10,7 +10,8 @@ namespace Varia.Backend.Tests;
 /// dropped object go, and a disconnect gives the definitions' budget back.</summary>
 internal static class SearchLiveChecks
 {
-    public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database)
+    public static async Task RunAsync(Action<bool, string> check, SqlService service, string connectionId, JsonSerializerOptions json, Func<string, string, Task<SqlRun>> sql, string database,
+        Func<string, string> ownLogin)
     {
         // A name that breaks out of brackets, strings and comments, and a marker only this run's definitions hold.
         var marker = "varia_marker_" + Guid.NewGuid().ToString("N")[..8];
@@ -53,8 +54,81 @@ internal static class SearchLiveChecks
             (ObjectSearchResult)await service.DispatchAsync("explorer.search", JsonSerializer.SerializeToElement(
                 new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), text, caseSensitive, wholeWord, regex, scope, Database: inDatabase), json), json);
 
+        // A login with a long name the server's unit is sure to hold: the connecting login may be too short to look for in the
+        // saved files (CI's is sa). The scratch database drops it when it goes.
+        var longLogin = ownLogin("search");
+        created = await sql("CREATE LOGIN [" + longLogin.Replace("]", "]]") + "] WITH PASSWORD = '" + ScratchDatabase.Throwaway().Replace("'", "''") + "', CHECK_POLICY = OFF;", "master");
+        check(created.Error is null, "the search checks create a login with a long name: " + created.Error);
+
+        // The saved index (IndexStore), on a temporary folder under a key of the checks' own: the first build saves what it reads.
+        var storeRoot = Directory.CreateTempSubdirectory("varia-index-store-live-").FullName;
+        var storeFolder = Path.Combine(storeRoot, IndexStoreLimits.FolderName);
+        var storeKey = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
+        service.Search.Store.Configure(new("encrypted", storeFolder, IndexStoreLimits.DefaultDiskMiB, Convert.ToBase64String(storeKey)));
+        await service.Search.Store.Idle();
+
         var events = new List<JsonElement>();
         var built = await service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None, value => events.Add(JsonSerializer.SerializeToElement(value, json)));
+        try
+        {
+            // A real build's units, each saved under the scope the connection itself established, and each loading back equal.
+            await service.Search.Store.Idle();
+            var profile = ((IObjectSearchHost)service).Profile(connectionId);
+            var scope = service.Search.ScopeOf(connectionId, profile);
+            var index = service.Search.IndexOf(connectionId)!;
+            var savedReads = index.Held.Where(read => !read.FailedPart).ToList();
+            var listed = scope is null ? [] : service.Search.Store.List(scope);
+            var files = Directory.GetFiles(storeFolder);
+            check(scope is not null && profile.ServerName is { Length: > 0 } && profile.PrincipalId is { Length: > 0 },
+                "the connect probe established the server's own name and the account, which is whose saved index this is");
+            check(listed.Count == savedReads.Count && savedReads.Count >= 2 && files.Length == savedReads.Count + (index.Resource is null ? 0 : 1) && service.Search.Store.Counts.Failed == 0
+                && files.All(file => IndexStoreNames.IsUnit(Path.GetFileName(file))) && service.Search.Store.Status is { Mode: "encrypted" } storeStatus && storeStatus.Files == files.Length,
+                "a real build saves every unit it holds, and the shared system objects once (" + files.Length + " files, " + files.Sum(file => new FileInfo(file).Length) + " bytes for " + savedReads.Count + " reads)");
+            var again = new IndexFileChecks.World(new ObjectIndexLimits { MemoryBytes = 4L << 30, NamesReserveBytes = 1L << 30 });
+            var equal = true;
+            foreach (var read in savedReads)
+            {
+                var kind = ReferenceEquals(read, index.Server) ? IndexUnitKind.Server : ReferenceEquals(read, index.Agent) ? IndexUnitKind.Agent : IndexUnitKind.Database;
+                var unit = listed.SingleOrDefault(item => item.Kind == kind && item.Database == read.Database);
+                if (unit is null) { equal = false; continue; }
+                var loaded = service.Search.Store.Load(unit, again.Connection, again.Limits, again.Pool);
+                equal &= loaded.Value is { } value && IndexFileChecks.Dump(value) == IndexFileChecks.Dump(read) && unit.Header.Children == !read.ChildrenLeftOut;
+                if (loaded.Value is { } put) again.Connection.Abandon(put);
+            }
+            var resourceEqual = index.Resource is not { } set || service.Search.Store.LoadResource(set.Key, long.MaxValue).Value is { } savedSet && IndexFileChecks.Dump(savedSet.Read.Table) == IndexFileChecks.Dump(set.Table);
+            check(equal && resourceEqual, "every unit the real build saved loads back equal to what the index holds");
+            // Only needles of 8 bytes or more: ciphertext is random, so a shorter one turns up by chance (CI's login "sa" is 2 bytes
+            // in UTF-8, one chance in 65,536 at every position of hundreds of KB). At 8 bytes a chance match is one in 2^64 a position.
+            // Every category keeps at least one long needle, or the check fails rather than pass with nothing to look for; the long
+            // login is checked to be in the index, so its absence from the files means something.
+            (string Category, string Text)[] texts =
+            [
+                ("object", hostile), ("object", "usp_Find"), ("object", "srch"), ("object", "spt_fallback_db"), ("object", "sp_who"),
+                ("database", database), ("server", profile.ServerName ?? ""), ("login", profile.Login ?? ""), ("login", longLogin),
+                ("definition", marker), ("definition", constant),
+            ];
+            var distinctive = texts
+                .SelectMany(text => new[] { (text.Category, Label: text.Category + " UTF-8", Bytes: System.Text.Encoding.UTF8.GetBytes(text.Text)), (text.Category, Label: text.Category + " UTF-16", Bytes: System.Text.Encoding.Unicode.GetBytes(text.Text)) })
+                .Where(needle => needle.Bytes.Length >= 8).ToList();
+            string[] categories = ["object", "database", "server", "login", "definition"];
+            var uncovered = categories.Where(category => !distinctive.Any(needle => needle.Category == category)).ToList();
+            var loginHeld = (await FindIn(null, longLogin, "names", wholeWord: true)).Hits.Count > 0;
+            check(uncovered.Count == 0 && loginHeld, "every category of name the saved files are searched for has a needle of 8 bytes or more (none: "
+                + (uncovered.Count == 0 ? "none" : string.Join(", ", uncovered)) + "), and the long login is in the index");
+            var inFiles = files.SelectMany(file => File.ReadAllBytes(file) is var content ? distinctive.Where(needle => content.AsSpan().IndexOf(needle.Bytes) >= 0).Select(needle => needle.Label) : []).Distinct().ToList();
+            check(inFiles.Count == 0,
+                "no saved file holds an object's, the database's, the server's or the login's name, or a definition's text, in UTF-8 or UTF-16 ("
+                + distinctive.Count + " needles; found: " + (inFiles.Count == 0 ? "none" : string.Join(", ", inFiles)) + ")");
+            check((await service.Search.Store.ClearAsync()) is { Kept: 0 } cleared && cleared.Files == files.Length && Directory.GetFiles(storeFolder).Length == 0, "a clear deletes every file the build saved");
+        }
+        finally
+        {
+            // The rest of the suite builds without a store: nothing more is written.
+            service.Search.Store.Configure(new("disabled", storeFolder, IndexStoreLimits.DefaultDiskMiB));
+            await service.Search.Store.Idle();
+            try { Directory.Delete(storeRoot, recursive: true); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException) { }
+        }
         check(built.Status is { State: "ready", Definitions: true } && built.Status.Indexed >= 1 && built.Status.Objects >= 4,
             "a build reads every database it can (" + built.Status.Indexed + " of " + built.Status.Databases + ", " + built.Status.Objects + " objects, " + built.ElapsedMs + " ms)");
         check(events.Count >= 2 && events[0].GetProperty("type").GetString() == "explorer.index.progress" && events[^1].GetProperty("done").GetInt32() == built.Status.Databases,
@@ -208,11 +282,19 @@ internal static class SearchLiveChecks
             var ended = service.Search.Builds;
             var running = service.Search.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), stop.Token);
             stop.Cancel();
+            var cancelled = false;
             try { await running; check(true, "Stop ends a build (it had finished)"); }
-            catch (RequestException error) { check(error.Code == "CANCELLED", "Stop ends a build with CANCELLED"); }
+            catch (RequestException error) { cancelled = error.Code == "CANCELLED"; check(cancelled, "Stop ends a build with CANCELLED"); }
             // Stopped or finished, the build's end tells the memory report to walk again (no read left showing as running).
             check(service.Search.Builds >= ended + 1, "a stopped build counts as ended for the memory report");
             check((await Find("FindList", "names")).Hits.Count == 1, "a stopped build keeps the index it had");
+            // explorer.indexStatus, through dispatch, tells the window what the stopped build kept: ready, and stopped.
+            async Task<ObjectIndexStatus> IndexStatus() =>
+                ((ObjectIndexResult)await service.DispatchAsync("explorer.indexStatus", JsonSerializer.SerializeToElement(new ObjectIndexStatusArgs(connectionId), json), json)).Status;
+            var afterStop = await IndexStatus();
+            check(afterStop.State == "ready" && afterStop.Stopped == (cancelled ? true : null), $"explorer.indexStatus reports a stopped build's index as ready and stopped ({afterStop.State}, {afterStop.Stopped}, cancelled {cancelled})");
+            await Build();
+            check((await IndexStatus()).Stopped is null, "a finished build clears the stopped mark");
         }
 
         // A budget the system objects alone fill: every database read stops at its first record, and the build still ends ready,
@@ -242,6 +324,37 @@ internal static class SearchLiveChecks
             catch (RequestException error) when (error.Code == "CANCELLED") { stopped = true; }
             check(stopped && stopping is { State: LookupState.Building, Skip.Code: "TOO_LARGE" } && tight.Lookup(connectionId)?.Database(database) is { State: LookupState.Skipped, Skip.Code: "TOO_LARGE" },
                 "a stopped real build leaves a database it did not reach skipped as before, never absent or ready: " + stopping + " then " + tight.Lookup(connectionId)?.Database(database));
+        }
+        // Another connection's BigQuery index holding everything its floors allow, the most BigQuery can take of the budget, under
+        // a limit this build's own request raises to 1,024 MiB (so the 640 MiB held is over the limit until the build applies
+        // it): this server's definitions still fit, none is left out for memory, and a search inside them finds this run's
+        // marker. (A server whose index needs more than the 128 MiB that leaves above the names' reserve would fail this.)
+        using (var beside = new ObjectSearchService(service))
+        {
+            const long MiB = 1024 * 1024;
+            beside.Budget.Force(1024 * MiB - 1024 * MiB / 8 * 3);
+            var full = await beside.IndexAsync(new(connectionId, Guid.NewGuid().ToString(), MemoryLimitMiB: 1024), CancellationToken.None);
+            var inside = beside.Search(new ObjectSearchArgs(connectionId, Guid.NewGuid().ToString(), marker, In: "definitions", Database: database), CancellationToken.None);
+            check(beside.Budget.Limit == 1024 * MiB && beside.Limits is { NamesReserveBytes: 256 * MiB, BigQueryNamesFloorBytes: 384 * MiB },
+                "a SQL Server build's memory limit reaches the budget on a real connection, with the reserve and floors in proportion");
+            check(full.Status is { State: "ready", LeftOut: null, LeftOutIn: null, Modules: > 0 } && full.Status.Skipped.All(skip => skip.Code is not ("TOO_LARGE" or ObjectSearchService.ChildrenLeftOut))
+                && inside.Total >= 1 && beside.Budget.Free >= beside.Limits.NamesReserveBytes,
+                $"beside a BigQuery index at its floor a real server keeps its definitions ({full.Status.Modules} kept, {full.Status.LeftOut ?? 0} left out, {inside.Total} hits inside them, {beside.Budget.Free / MiB} MiB free)");
+        }
+        // Memory that ran out and came back: built with less than the names' reserve free, every definition is left out, the
+        // shared system objects' too, and the status says so; once there is room, a rebuild reads them all, the system objects
+        // again as well, and the count goes.
+        using (var starved = new ObjectSearchService(service))
+        {
+            var others = starved.Limits.MemoryBytes - starved.Limits.NamesReserveBytes + 1;
+            starved.Budget.Force(others);
+            var without = await starved.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            var system = starved.IndexOf(connectionId)?.Resource?.LeftOut ?? -1;
+            starved.Budget.Release(others);
+            var with = await starved.IndexAsync(new(connectionId, Guid.NewGuid().ToString()), CancellationToken.None);
+            check(without.Status is { LeftOut: > 0, LeftOutIn: > 0 } && system > 0 && with.Status is { LeftOut: null, LeftOutIn: null } && with.Status.Modules > without.Status.Modules
+                && starved.IndexOf(connectionId)?.Resource is { LeftOut: 0, Modules: > 0 } && starved.Resources.Held.Count == 1,
+                $"definitions left out for memory are counted ({without.Status.LeftOut} in {without.Status.LeftOutIn} databases, {system} of the system objects) and all read once a rebuild finds room ({with.Status.Modules} kept)");
         }
         // A stopped index read cancels its batch on the server, through the same ReadBatchAsync every index read takes: a batch of
         // 40 MB of rows stopped at its first row never reaches the statement after them. Without the cancel (the control), closing

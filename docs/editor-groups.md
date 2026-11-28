@@ -69,7 +69,8 @@ Monaco editor, and groups split side by side, stack, or float over the editor ar
 ## Moving documents
 
 Drag a tab along a strip to reorder, onto another strip to move, onto the docking compass (the workspace's SSMS-style
-guides over the group under the pointer) to tab into that group or split it, or Shift-drag to float. The drag stays inside
+guides over the group under the pointer) to tab into that group or split it. Shift+click acts as a plain click: Dockview's
+own Shift-press float is turned off, and a Shift-drag is an ordinary drag. The drag stays inside
 the window. While a workspace panel is dragged, the editor area ignores the pointer so the workspace's guides answer.
 
 Commands (`src/shared/commands/catalog.ts`; Ctrl+1–9 pick query tabs as a browser's do, Go to Query 1 to 8 and Go to
@@ -117,11 +118,13 @@ Last Query, or results while focus is in the results pane):
 ## Floating and popouts
 
 - Float Editor puts a document in a floating group over the editor area (inside the main window) with its own strip and
-  editor; Dock Editor puts it back. Float Editor never floats the only docked document, but Dockview's own float
-  (Shift-drag, a tab released outside the area) can; the grid then keeps an empty group saying the open queries float,
-  with Dock query, until another grid group shows a document or no document is left. At the 16-group cap there is no room
-  for that group, so the floating group docks once the Shift-drag is released (`afterPointer`, also released by window
-  blur). Hot exit keeps such a layout as an empty grid plus its floating groups.
+  editor; Dock Editor puts it back. Float Editor never floats the only docked document, but dragging the grid's last tab
+  onto a floating group, or releasing it away from the guides (Float While Dragging too), leaves every document floating;
+  the grid then keeps an empty group saying the open queries float, with Dock query, until another grid group shows a
+  document or no document is left. At the 16-group cap there is no room for that group, so a floating group docks
+  instead, with a warning. Hot exit keeps such a layout as an empty grid plus its floating groups.
+- A floating group moves by its title bar. A Shift-press inside a floated document (a query's text, a document's grid or
+  plan) is that document's own, as when docked, so Shift+click extends a selection there instead of moving the float.
 - Documents do not pop out into OS windows: Monaco binds its DOM, focus, IME, clipboard and workers to the window that
   created it (docs/popout-windows.md, *Limits*). The tab menu has no Move to New Window, and dragging a tab out of the
   window floats it instead.

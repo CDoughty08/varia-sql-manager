@@ -191,7 +191,7 @@ internal static partial class RestoreDescribe
         {
             Add(command, "@take", SqlDbType.Int, 0, takeFiles + 1);
             await using var reader = await command.ExecuteReaderAsync(token);
-            while (await reader.ReadAsync(token)) if (!reader.IsDBNull(1)) files.Add(new(reader.GetString(0), reader.GetString(1)));
+            while (await reader.ReadAsync(token)) if (!reader.IsDBNull(1)) files.Add(new(reader.GetString(0), reader.GetString(1), reader.FieldCount > 2 && !reader.IsDBNull(2) ? reader.GetString(2) : null));
         }
         return new(linux ? "/" : "\\", canRestore, Clip(destinations, takeDestinations), destinations.Count > takeDestinations, Clip(files, takeFiles), files.Count > takeFiles, data, log, backup);
     }

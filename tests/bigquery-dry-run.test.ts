@@ -18,6 +18,8 @@ describe('bigquery.dryRun contract', () => {
     expect(methodAllows('bigquery.dryRun', 'bigquery')).toBe(true)
     expect(methodAllows('bigquery.dryRun', 'sqlserver')).toBe(false)
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', dataset: 'sales' })).not.toThrow()
+    expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', noDefaultDataset: true })).not.toThrow()
+    expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', dataset: 'sales', noDefaultDataset: true })).toThrow()
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: '' })).toThrow()
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'x'.repeat(1_000_001) })).toThrow()
     expect(() => validateRequest('bigquery.dryRun', { connectionId, sql: 'SELECT 1', dataset: 'a-b' })).toThrow()

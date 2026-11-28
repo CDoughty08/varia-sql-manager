@@ -71,7 +71,7 @@ export interface ModelLanguageContext {
   readonly suspended?: boolean
 }
 export type CrossViewSwitchResult = { readonly ok: true } | { readonly ok: false; readonly reason: string }
-export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean }
+export interface DocumentSnapshot { readonly documents: readonly QueryDocument[]; readonly activeId: string; readonly busy: boolean; readonly unsavedFill?: boolean }
 export const closedQueryLimits = { count: 20, characters: 4_000_000 } as const
 interface ClosedQuery {
   readonly name: string
@@ -529,8 +529,14 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const preferred = this.successor?.(id)
     return preferred && preferred !== id && next.tabs.some(document => document.id === preferred) ? { ...next, activeId: preferred } : next
   }
+  private hasUnsavedFill(): boolean {
+    for (const entry of this.entries.values()) if (entry.fill?.userEdited) return true
+    return false
+  }
   private changed(snapshot: DocumentSnapshot): void {
-    this.publish(snapshot)
+    const unsavedFill = this.hasUnsavedFill()
+    const { unsavedFill: _previous, ...base } = snapshot
+    this.publish(unsavedFill ? { ...base, unsavedFill: true } : base)
     this.events.emit({ type: 'documents.changed' })
   }
   private replace(id: string, patch: Partial<Omit<QueryDocument, 'id'>>): void {
@@ -755,7 +761,13 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.notifyContentChanged(id)
     const current = this.get(id)
     if (!current) return
-    if (fill) { if (!fill.appending) fill.userEdited = true; return }
+    if (fill) {
+      if (!fill.appending && !fill.userEdited) {
+        fill.userEdited = true
+        this.changed(this.getSnapshot())
+      }
+      return
+    }
     const dirty = this.isEntryDirty(current, entry)
     // SQL never enters a React snapshot; ordinary typing only publishes a dirty transition.
     if (dirty !== current.dirty) this.replace(id, { dirty })
@@ -811,7 +823,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     const dirty = unsaved && (!!file || text.length > 0)
     const document: QueryDocument = { id, name, database, connectionId, file, dirty, savedVersionId: dirty ? null : model.getAlternativeVersionId(), ...kind ? { kind } : {}, ...targetId ? { targetId, attachWanted: true } : {}, ...extra }
     const subscription = model.onDidChangeContent(() => this.handleModelContentChange(id, model))
-    this.entries.set(id, { model, subscription, retiredSecondaryVersions: 0, plain, viewState, edits: 0 })
+    this.entries.set(id, { model, subscription, retiredSecondaryVersions: 0, plain, viewState, edits: model.getVersionId() })
     this.insertDocument(document)
     return document
   }
@@ -1143,12 +1155,12 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     if (this.customs.has(id)) { this.closeCustom(id); return }
     const entry = this.entries.get(id)
     if (!entry) return
-    const version = this.revision(id)
+    const version = entry.edits
     const document = this.get(id)
     // Only a single-server query has a persistent session to end.
     const note = isQueryDocument(document) && !document?.multiMode ? await this.endSession(id, transaction, options) : undefined
     if (this.disposed || this.entries.get(id) !== entry) return note
-    if (version !== this.revision(id)) {
+    if (version !== entry.edits) {
       // The session has ended all the same, so what became of it shows in the query that stays.
       if (note) this.sessionHooks?.note?.(id, note)
       throw new Error('The query changed while closing. Close it again to review the latest changes.')
@@ -1159,7 +1171,7 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
   /** Sessions and the transport have ended. Validate the complete reviewed query set before the first local close. */
   closeDisconnectedQueries(approved: readonly { readonly id: string; readonly revision: number }[]): void {
     if (this.disposed || !this.getSnapshot().busy || new Set(approved.map(item => item.id)).size !== approved.length || approved.some(({ id, revision }) =>
-      !isQueryDocument(this.get(id)) || !this.entries.has(id) || this.revision(id) !== revision))
+      !isQueryDocument(this.get(id)) || !this.entries.has(id) || this.editRevision(id) !== revision))
       throw new Error('The approved queries changed before local close. All tabs stayed open.')
     for (const { id } of approved) this.closeText(id, this.entries.get(id)!)
   }
@@ -1167,6 +1179,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.keepClosed(id, entry)
     const current = this.getSnapshot(), next = this.closing(id)
     this.unshow(id, current.activeId === id ? next.activeId : undefined)
+    entry.fill?.finish()
+    entry.fill = undefined
     entry.subscription.dispose()
     entry.model.dispose()
     entry.secondarySubscription?.dispose()
@@ -1209,6 +1223,8 @@ export class DocumentService extends SnapshotStore<DocumentSnapshot> implements 
     this.follower = undefined
     this.secondaryFollower = undefined
     for (const entry of this.entries.values()) {
+      entry.fill?.finish()
+      entry.fill = undefined
       entry.subscription.dispose()
       entry.model.dispose()
       entry.secondarySubscription?.dispose()

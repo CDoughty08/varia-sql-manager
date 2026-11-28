@@ -42,8 +42,8 @@ const stringCostly = ['toLocaleLowerCase', 'toLocaleUpperCase', 'localeCompare',
 const typedConstructors = ['Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array', 'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array', 'BigInt64Array', 'BigUint64Array'] as const
 
 /** Runs `run` with the meter on and returns its result and the work it did; a promise is metered until it settles. */
-export function meterWork<T>(run: () => T): { result: T; work: Work }
 export function meterWork<T>(run: () => Promise<T>): Promise<{ result: T; work: Work }>
+export function meterWork<T>(run: () => T): { result: T; work: Work }
 export function meterWork<T>(run: () => T | Promise<T>): { result: T; work: Work } | Promise<{ result: T; work: Work }> {
   const work: Work = { elements: 0, allocated: 0, allocations: 0, characters: 0, costly: 0 }
   const restores: (() => void)[] = []

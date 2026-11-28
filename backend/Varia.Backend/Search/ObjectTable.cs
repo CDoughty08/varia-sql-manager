@@ -76,6 +76,16 @@ internal sealed class ObjectTable
     /// <summary>The editor metadata (types, index and key columns), or null where the read kept no children.</summary>
     public ObjectDetails? Details => details;
 
+    /// <summary>The entries as the table holds them, for <see cref="IndexFile"/>, which saves them as they are.</summary>
+    internal ReadOnlySpan<ObjectEntry> Entries => entries;
+    /// <summary>The dates the entries' 32 bits cannot hold, by entry, or null.</summary>
+    internal IReadOnlyDictionary<int, DateTime>? Dates => dates;
+
+    /// <summary>A table of parts <see cref="IndexFile"/> loaded and checked (<see cref="IndexFileUnit"/>): the arrays are the
+    /// table's from here on. Its shapes are its own, by the ids its entries carry, not the process's.</summary>
+    internal static ObjectTable FromParts(ObjectEntry[] entries, object?[] texts, ObjectShapes.Shape[] shapes, Dictionary<int, DateTime>? dates, ObjectDetails? details) =>
+        new(entries, texts, shapes, dates, details);
+
     /// <summary>The type of the column, parameter or scalar function at <paramref name="at"/>, or null.</summary>
     public TypedDetail? Typed(int at) => details?.Typed(at, texts);
 
@@ -251,6 +261,11 @@ internal sealed class ObjectTable
         private Dictionary<int, DateTime>? dates;
         private ObjectDetails.Builder? details;
         private int removed;
+        /// <summary>The last <see cref="Build"/>'s renumbering (-1 for a removed entry), null when it removed none.</summary>
+        private int[]? built;
+
+        /// <summary>The entry <paramref name="at"/> became in the table the last <see cref="Build"/> made, or -1 when it was left out.</summary>
+        public int BuiltAt(int at) => built is null ? at : built[at];
 
         public int Count { get; private set; }
         /// <summary>Every text that took an id, in id order.</summary>
@@ -365,7 +380,7 @@ internal sealed class ObjectTable
             Dictionary<int, DateTime>? keptDates = null;
             for (int at = 0, to = 0; at < Count; at++)
             {
-                if (Removed(at)) continue;
+                if (Removed(at)) { if (map is not null) map[at] = -1; continue; }
                 if (map is not null) map[at] = to;
                 kept[to] = entries[at];
                 if (kept[to].Modified == uint.MaxValue) (keptDates ??= [])[to] = dates![at];
@@ -375,6 +390,7 @@ internal sealed class ObjectTable
                 for (var at = 0; at < kept.Length; at++)
                     if (kept[at].Owner >= 0) kept[at].Owner = map[kept[at].Owner];
             var keptDetails = details?.Build(at => Removed(at) ? -1 : map is null ? at : map[at]);
+            built = map;
             return new(kept, [.. texts], ObjectShapes.Snapshot, keptDates, keptDetails);
         }
 
@@ -388,6 +404,7 @@ internal sealed class ObjectTable
             dates = null;
             details = null;
             removed = 0;
+            built = null;
             Count = 0;
         }
     }

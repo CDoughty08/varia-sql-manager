@@ -337,9 +337,25 @@ internal sealed class ResultTextWriter
                 HexBytes(value);
                 if (options.Format == TextFormat.Json) Write("\""u8);
                 return;
-            case ValueKind.Number when typed && options.Format == TextFormat.Json && IsJsonNumber(value) && KeepsValue(value):
-                Write(value);
-                return;
+            case ValueKind.Number when typed && options.Format == TextFormat.Json:
+                if (page.TryExact(column, row, out var exact) && double.IsFinite(exact))
+                {
+                    Span<byte> formatted = stackalloc byte[32];
+                    var formattedOk = columns[column].DataType.Equals("real", StringComparison.OrdinalIgnoreCase) && (float)exact == exact
+                        ? System.Buffers.Text.Utf8Formatter.TryFormat((float)exact, formatted, out var written)
+                        : System.Buffers.Text.Utf8Formatter.TryFormat(exact, formatted, out written);
+                    if (formattedOk && IsJsonNumber(formatted[..written]))
+                    {
+                        Write(formatted[..written]);
+                        return;
+                    }
+                }
+                if (IsJsonNumber(value) && KeepsValue(value))
+                {
+                    Write(value);
+                    return;
+                }
+                break;
             case ValueKind.Bit when typed && options.Format == TextFormat.Json:
                 var bit = ColumnTypes.BooleanNumber(value);
                 if (bit.Length == 1 && bit[0] is (byte)'0' or (byte)'1')
@@ -480,7 +496,9 @@ internal sealed class ResultTextWriter
             }
             digits++;
         }
-        return first < 0 || last - first < 15;
+        return (first < 0 || last - first < 15)
+            && System.Buffers.Text.Utf8Parser.TryParse(number, out double parsed, out var consumed)
+            && consumed == number.Length && double.IsFinite(parsed);
     }
 
     private void HexBytes(ReadOnlySpan<byte> bytes)

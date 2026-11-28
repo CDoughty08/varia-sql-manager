@@ -11,13 +11,16 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
 
 ## Using IntelliSense
 
-- **Completion.** **Ctrl+Space**, or a provider trigger character such as `.`. Suggestions use the query tab's
-  connection and database; switching tabs does not change another editor's pending request.
-- **Exact matches first.** A name that matches the typed word exactly, ignoring case and brackets, is listed and selected
-  first, above names that merely start with it, fuzzy matches and system objects. Monaco's own scoring would otherwise
-  prefer a prefix in the typed case (`orders` would rank `orders_archive` or a lower-case system view above `Orders`).
-  Each list is re-ranked as the word grows: a complete answer is reused for identifier characters typed at the caret,
-  and a truncated one is requested again.
+- **Completion.** **Ctrl+Space**, or a provider trigger character such as `.` (and `` ` `` in GoogleSQL). Suggestions use the query tab's
+  connection and database; switching tabs does not change another editor's pending request. Suggestions show the identifier
+  name with right-aligned kind/type metadata, with document-word suggestions (`wordBasedSuggestions`) disabled so comments and
+  unrelated words never pollute SQL lists. Accept suggestions with **Tab** or click; **Enter** inserts a newline so short
+  table aliases (such as `t`) are never hijacked by clause keywords.
+- **Exact matches first.** A name that matches the typed word exactly, ignoring case and quoting (brackets or backticks),
+  is listed and selected first, above names that merely start with it, fuzzy matches and system objects. Monaco's own
+  scoring would otherwise prefer a prefix in the typed case (`orders` would rank `orders_archive` or a lower-case
+  system view above `Orders`). Each list is re-ranked as the word grows: a complete answer is reused for identifier
+  characters typed at the caret, and a truncated one is requested again.
 - **Brackets.** Every column suggestion shows and inserts its name in brackets (`[bob].[columnName]`, `[Order Date]`);
   the bare name still filters, and so does a name after a typed `[` or `"`. A table or other name that is inserted in
   brackets because it needs quoting also shows its brackets. Accepting a suggestion inside an auto-closed `[...]`
@@ -31,6 +34,8 @@ IntelliSense needs no separate installation, path setting or first-launch downlo
   probe edits are restored before any other request), limited to 16 source qualifiers and a five-second probe budget. An
   incomplete expansion does not bring back ambiguous bare columns.
 - **Hover** an identifier for the language server's information.
+- **Lazy schema preview drawer.** Arrowing through completion suggestions lazily resolves a full schema preview in Monaco's details pane from the local Search Objects RAM index (~1 ms, zero extra SQL Server, STS, or BigQuery calls): BigQuery items show their path, PR #738 discovery tier (`Billing`, `★ Starred`, `Discovered`), rows, size, partitioning/clustering, description, nested `STRUCT` field summaries, and top columns; SQL Server items enrich STS suggestions with columns, types, `PK`/`UK`/`FK`/`IDENTITY` markers, indexes, and incoming/outgoing foreign keys.
+- **Unified status bar IntelliSense popover.** Clicking the status bar's SQL IntelliSense chip opens a Calm Pro popover (dismissible with **Esc** or an outside click) summarizing index and provider health, the shared Search Objects memory budget bar, one-click **Refresh Cache** / **Refresh Local Cache** (`Ctrl+Shift+R`), and **Settings**. On BigQuery tabs it breaks down the 3-wave index (billing, ★ starred, and discovered / memory-capped projects) and checks the health of each `FROM`/`JOIN` table in the active query; on SQL Server tabs it reports SQL Tools Service and `IndexLookup` status alongside indexed database counts.
 - Hover and completion widgets can extend beyond a short query panel within the window; each editor owns its widgets
   across split and floating groups, and menus and dialogs stay above them.
 
@@ -123,10 +128,12 @@ checking**.
 ### Refresh Local Cache
 
 **Ctrl+Shift+R** (**Command+Shift+R** on macOS), **Edit › IntelliSense › Refresh Local Cache** or the palette rebuilds
-the query's metadata cache after schema changes, for its provider, connection and database. It preserves unsaved SQL,
-execution sessions, transactions and temporary tables, and waits for the provider's readiness notification before
-reporting completion. The status bar shows progress and failures; changing the query's target or closing it discards an
-obsolete result.
+the query's metadata cache after schema changes, for its provider, connection and database (or BigQuery datasets). It
+preserves unsaved SQL, execution sessions, transactions and temporary tables. On SQL Server it calls `language.refresh`
+and waits for the provider's readiness notification; on BigQuery it clears the connection's `LookupCache` immediately
+and runs a scoped `explorer.index` refresh for the datasets referenced by the tab (or its default dataset and billing
+project). The status bar shows `SQL: Refreshing` (`IntelliSense refreshing`) and failures; changing the
+query's target, disconnecting or closing it discards an obsolete result.
 
 ### Authentication
 
@@ -141,33 +148,77 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
 ([ipc.md](ipc.md)). Nothing is sent to Google and nothing is billed. SQL Server tabs keep SQL Tools.
 
 - **Pipeline.** `src/shared/completion/` knows no engine: a grammar reads the caret's statement into a site (an object
-  name, a member after a dot, an expression or a keyword) and its scope; `resolve.ts` asks the index for the objects the
-  scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, how a written name becomes an
-  index path, keywords and functions. GoogleSQL's are `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
-- **Objects.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
-  `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects (billing, starred
-  and discovered accessible projects). `x.` lists a project's
-  datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group is one
-  item with its range, and a wildcard (`events_*`) or one of its shards within the range reads the newest shard's columns
+  name, a member after a dot, an expression, or a clause site such as `afterFromTable`, `statementStart`, `castType`,
+  `datePart`, `systemVar`, `infoSchema`, `joinCondition`, or `unnestArg`) and its scope; `resolve.ts` asks the index for
+  the objects the scope names; `complete.ts` and `hover.ts` build the items. A dialect gives quoting, clause-specific
+  keywords, how a written name becomes an index path, keywords and functions. GoogleSQL's are
+  `src/shared/googlesql/scope.ts` (the reader) and `dialect.ts`.
+- **Objects and cross-project jump.** After `FROM`, `JOIN`, a comma in `FROM` (after a join condition too), `CALL`, `UPDATE`, `INTO`, `TABLE`, `MERGE` and `USING`: the statement's
+  `WITH` names, the default dataset's objects, the billing project's datasets and all indexed projects ranked
+  **Billing → ★ Starred → Recently Queried → Discovered** (with clear tier descriptions including `Names only · memory cap`
+  and `Wave 3 indexing…`; Billing and Starred projects are never truncated behind the 500-item page cap). Once 2 or more
+  characters are typed at an unqualified `FROM`/`JOIN` position, a bounded cross-project fuzzy jump (`mode: 'jump'`, up to
+  50 hits in RAM) surfaces matching tables, views, routines and models across indexed datasets ranked **Default dataset →
+  Billing → ★ Starred → Recently Queried → Discovered**, inserting compact `dataset.table` for the billing project or
+  `` `project.dataset.table` `` for cross-project matches. `x.` lists a project's
+  datasets or the billing project's dataset `x`'s objects; `x.y.` that dataset's objects. A date-sharded group suggests
+  its wildcard (`events_*`, `Wildcard · N shards, first–last`) ahead of its latest concrete shard (`events_YYYYMMDD`),
+  and querying a wildcard (`events_*`) or a concrete shard within the range reads the newest shard's columns
   (`events_*` reads the `events_YYYYMMDD` group even beside `events_summary`; `ev*` over two groups, or a group and a
-  table, reads none).
-- **Expressions.** The columns of every source in scope, the scope's aliases, functions and keywords. `alias.` lists that
-  source's columns, `alias.record.` a STRUCT's fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any
-  function. After `CAST(… AS`, types and keywords.
+  table, reads none). Hyphenated project and table identifiers (`my-proj-2`) use a hyphen-safe `wordPattern` so typing
+  or filtering across `-` keeps suggestions anchored without breaking subtraction expressions.
+- **On-demand JIT hydration.** When **Options › Text Editor › GoogleSQL › Fetch schemas on demand for tables without
+  indexed columns** (`textEditor.googleSql.jitHydrate`, on by default) is enabled and a query references a table or routine
+  in a tracked project whose columns have not been indexed yet (Wave 3 still running or stopped at the memory cap),
+  IntelliSense fetches just that object via `language.hydrate` (free REST `tables.get` / `routines.get`, never billed,
+  rate-limited and cached under the shared 512 MiB memory budget with a 2-minute negative cache for 404/403). Unstarred
+  external/public projects (such as `bigquery-public-data`) are never fetched automatically; completion and hover offer
+  one-click **Fetch schema (free)** and **★ Star project** actions instead.
+- **BigQuery pseudo-columns.** Wildcard table references (`events_*`) automatically include `_TABLE_SUFFIX` (`STRING`),
+  ingestion-time partitioned tables include `_PARTITIONTIME` (`TIMESTAMP`) and `_PARTITIONDATE` (`DATE`), and external
+  tables include `_FILE_NAME` (`STRING`). Pseudo-columns are excluded from `SELECT *` expansion in CTEs and subqueries.
+- **Clause keywords, smart context sites and function snippets.** After a `FROM` or `JOIN` table, subquery, `UNNEST`, or alias (`afterFromTable`),
+  only valid `FROM`-clause continuations are suggested (`AS` when unaliased, `ON`/`USING` inside `JOIN`, `WHERE`, joins,
+  `GROUP BY`, `ORDER BY`, `TABLESAMPLE`, etc. — never `TABLE`, `ABORT`, or data types). At `statementStart` only statement
+  starters are suggested; inside `CAST(… AS` / `SAFE_CAST(… AS` (`castType`) only the 22 GoogleSQL types and
+  `ARRAY<>`/`STRUCT<>`/`RANGE<>` snippets; inside `EXTRACT(| FROM …)` and the granularity argument of
+  `DATE_TRUNC`/`DATETIME_TRUNC`/`TIMESTAMP_TRUNC`/`TIME_TRUNC`/`DATE_DIFF`/`DATETIME_DIFF`/`TIMESTAMP_DIFF`/`TIME_DIFF`/`LAST_DAY`
+  (`datePart`) only the valid date/time parts for that function; after `@@` (`systemVar`, with `@` as a trigger character
+  while keeping single `@` query parameters quiet) curated BigQuery system variables (`@@project_id`, `@@dataset_id`,
+  `@@script.bytes_billed`, `@@error.message`, etc., plus dotted namespace members after `@@script.`/`@@error.`); and after
+  `INFORMATION_SCHEMA.` (`infoSchema`) curated metadata views filtered and badged by dataset vs. region scope.
+  Non-niladic functions and routines insert `NAME($0)` (skipping `(` if already ahead on the same line) and trigger
+  Signature Help (`editor.action.triggerParameterHints`); niladic functions (`CURRENT_DATE`, `CURRENT_TIMESTAMP`, etc.)
+  stay bare.
+- **Expressions, joins and `ARRAY<STRUCT>` / `UNNEST`.** The columns of every source in scope, the scope's aliases, functions and keywords.
+  When two or more in-scope sources share a column name (`id`), unqualified completion emits qualified items (`o.id`, `c.id`,
+  each filterable by `id`) instead of dropping the second source's column. `alias.` lists that source's columns,
+  `alias.record.` a `STRUCT`'s fields, `NET.` (and the other namespaces) their functions, and `SAFE.` any function.
+  Direct dot access on an `ARRAY<STRUCT>` column (`o.items.`) blocks invalid field suggestions and offers an actionable
+  `UNNEST(o.items)` replacement instead; inside `UNNEST(…)` (`unnestArg` and `UNNEST(o.|)`), `ARRAY<…>` columns rank at
+  the top ahead of scalar columns and keywords.
 - **Scope.** `FROM` and `JOIN` items with or without `AS` (after `FOR SYSTEM_TIME AS OF` and `TABLESAMPLE` too), dashed
   projects written without backticks, comma joins, `UNNEST(…) AS x` and an earlier item's array (`FROM orders o, o.items`), subqueries (by their select
   list's names and stars), `WITH` queries (each sees only the ones before it, so one may read the table it shadows), set operations and outer queries' sources.
   An unqualified table is in the tab's default dataset of the connection's billing project.
-- **Names** are inserted as GoogleSQL takes them: bare when plain and not reserved, else in backticks.
-- **Hover.** A table or view: its kind and path, rows, size, partitioning, clustering, shards and top-level columns with
-  types (the first 40); a routine's signature; a column or field: type, REQUIRED and description; an alias or `WITH`
-  name: what it reads; a function: its signatures.
-- **Index state.** While the index builds, every list is incomplete, so names read later appear as the word grows; the
-  first request on a connection that was never indexed starts a build when Options allows builds on connect. A project
+- **Names** are inserted as GoogleSQL takes them: bare when plain and not reserved, else in backticks. Accepting a leaf
+  identifier (`table`, `view`, `routine`, `model`, `column`, `field`, `cte`, `alias`) inside auto-closed `` `…` ``
+  consumes the trailing closing backtick so the caret exits cleanly; accepting a container (`project`, `dataset`) keeps
+  the caret inside so `.` chaining continues.
+- **Hover.** 3-level BigQuery hover: hovering a **project** segment shows its PR #738 tier (`Billing`, `★ Starred`, or
+  `Discovered`), dataset counts, names-only/memory-cap state, and star/refresh hints; hovering a **dataset** shows its
+  location (when known), object counts by kind, and sample objects; hovering a **table** or **view** shows its kind,
+  tier, path, rows, size, partitioning, clustering, shards, description, and top-level columns with nested `STRUCT` field
+  counts (`STRUCT · 3 fields: city, state, geo`, first 40 columns); a routine shows its signature; a column or field shows
+  type, REQUIRED and description; an alias or `WITH` name shows what it reads; a function shows its signatures.
+- **Index state.** While the index builds, every index-reading list is incomplete, so names read later appear as the word
+  grows; the first request on a connection that was never indexed starts a build when Options allows builds on connect.
+  `IndexCompletionService` subscribes to `ObjectSearchService` so index builds, manual refreshes, and DDL-stale updates
+  invalidate that connection's `LookupCache` immediately (with a generation guard blocking stale in-flight writes). A project
   read by name only has datasets and tables but no columns. The status bar's IntelliSense item says when the index is
-  building, unbuilt, unreachable or the tab is disconnected (keywords and functions only).
+  building, refreshing, unbuilt, unreachable or the tab is disconnected (keywords and functions only).
 - **Limits.** `language.lookup` takes 16 paths a request and answers 500 items a path by default (2,000 at most, 4,000
-  in all); the renderer keeps answers per connection for 15 seconds (256 at most) and sends at most 4 lookups at once.
+  items or 12 MiB estimated UTF-8/MessagePack bytes in all); the renderer keeps answers per connection for 15 seconds (256 at most) and sends at most 4 lookups at once.
   Documents over 250,000 characters get none, and subqueries nested (or `WITH` queries chained through `*`) more than 64
   deep give no columns. One completion merges at most a million `*` columns across its `WITH` queries and subqueries;
   past that the list is incomplete. A table wider than its share is asked again by what is typed (up to 4 prefixes, and
@@ -178,7 +229,7 @@ index ([object-search.md](object-search.md#bigquery)) in the backend's memory th
 `npm run dev`, `npm run build`, `npm start` and `npm run build:smoke` prepare the pinned runtime first. The first run
 downloads the upstream archive; later runs verify and reuse it. Transient failures get up to three attempts within one
 three-minute budget, the last through the pinned asset's official GitHub API download, checksum unchanged.
-`npm run package` prepares its platform in `beforePack`; release CI prepares it explicitly.
+`npm run package` prepares its platform in `beforePack`; release CI prepares it explicitly ([packaging locally](ci.md#packaging-locally)).
 
 The pin and per-platform SHA-256 hashes are in `build/sqltools-service.json`. Preparation verifies the archive before
 extraction, keeps the whole runtime and upstream notices, adds the component's MIT license and records each file's hash.
@@ -226,8 +277,9 @@ before promoting any SQL Server-specific assumption into the common contract.
 
 ## Scope and limits
 
-- Implemented: completion, hover, syntax/catalog diagnostics, metadata-cache refresh, Go To Definition. Not yet:
-  formatting, signature help, completion-item resolution, Entra IntelliSense.
+- Implemented: completion, lazy completion-item schema previews (via local Search Objects `language.lookup` on both
+  BigQuery and SQL Server), hover, syntax/catalog diagnostics, metadata-cache refresh, Go To Definition, and unified status
+  bar IntelliSense popover. Not yet: formatting, signature help, Entra IntelliSense.
 - Documents above 250,000 UTF-16 code units edit and execute normally without language requests.
 - Completion keeps at most 128 documents and 8,000,000 UTF-16 code units in total, and returns at most 500 items per
   response, prioritizing matching identifiers before truncation so later catalog names stay reachable.

@@ -8,10 +8,10 @@ import type { Workbench } from '../src/renderer/src/core/workbench'
 import { WorkbenchProvider } from '../src/renderer/src/core/WorkbenchContext'
 import MemoryIndicator from '../src/renderer/src/results/MemoryIndicator'
 import { memoryLevel, memoryTotalLabel, MemoryUsageService } from '../src/renderer/src/results/memory'
-import { resultTargets } from '../src/renderer/src/results/memory-details'
+import { indexStoreLine, resultTargets } from '../src/renderer/src/results/memory-details'
 import { formatBytes } from '../src/renderer/src/results/status'
 import { SettingsService } from '../src/renderer/src/settings/SettingsService'
-import type { ResultMemoryDetail } from '../src/shared/contracts'
+import type { IndexStoreStatus, ResultMemoryDetail } from '../src/shared/contracts'
 import type { MemoryReport } from '../src/shared/ipc/port-messages'
 import { defaultSettings } from '../src/shared/settings/catalog'
 import { stylesheetRules } from './fixtures/css-rules'
@@ -201,6 +201,66 @@ async function mountIndicator(opts: {
   if (opts.pin !== false) await act(async () => { trigger().click() })
   return { host, trigger, panel, results, documents, queries, resultMemory, indexMemory }
 }
+
+describe('the saved index in the Memory panel', () => {
+  const store = (patch: Partial<IndexStoreStatus> = {}): IndexStoreStatus => ({ mode: 'encrypted', files: 1204, bytes: 312 * MB, limitBytes: 2048 * MB, ...patch })
+  it('says what is on disk against the limit while the store saves, and how it stands in every state', () => {
+    expect(indexStoreLine(store())).toEqual({ mode: 'encrypted', icon: 'lock', state: 'Encrypted', usage: '1,204 files · 312 MB / 2,048 MB' })
+    expect(indexStoreLine(store({ files: 3, bytes: 4096, limitBytes: 262_144 * MB }))).toMatchObject({ usage: '3 files · <1 MB / 256.0 GB' })
+    expect(indexStoreLine(store({ files: 1, bytes: 0, limitBytes: 512 * MB }))).toMatchObject({ usage: '1 file · 0 MB / 512 MB' })
+    expect(indexStoreLine(store({ mode: 'clearText' }))).toEqual({ mode: 'clearText', icon: 'unlock', state: 'Not encrypted (your choice in Options)', usage: '1,204 files · 312 MB / 2,048 MB' })
+    expect(indexStoreLine(store({ mode: 'disabled', files: 0, bytes: 0 }))).toEqual({ mode: 'disabled', icon: 'circle-slash', state: 'Off in Options' })
+    expect(indexStoreLine(store({ mode: 'noKeyStore' }))).toEqual({ mode: 'noKeyStore', icon: 'circle-slash', state: 'Off: this system has no key store' })
+    expect(indexStoreLine(store({ mode: 'unavailable' }))).toEqual({ mode: 'unavailable', icon: 'warning', state: 'Unavailable: its folder cannot be used' })
+  })
+  it('follows the store an index event carries, publishes only when a figure changes, and forgets it with the backend', () => {
+    const listeners = new Set<(memory: MemoryReport) => void>()
+    const service = new MemoryUsageService({ onMemory: listener => { listeners.add(listener); return { dispose: () => listeners.delete(listener) } } }, 'index')
+    let changes = 0
+    service.subscribe(() => { changes++ })
+    const push = (memory: MemoryReport) => { for (const listener of listeners) listener(memory) }
+    push({ usedBytes: 8 * MB, globalBytes: 512 * MB, generation: 1, seq: 1, store: store() })
+    expect(service.getSnapshot().store).toEqual(store())
+    expect(changes).toBe(1)
+    // The same figures again publish nothing; one more file does.
+    push({ usedBytes: 8 * MB, globalBytes: 512 * MB, generation: 1, seq: 2, store: store() })
+    expect(changes).toBe(1)
+    push({ usedBytes: 8 * MB, globalBytes: 512 * MB, generation: 1, seq: 3, store: store({ files: 1205 }) })
+    expect(changes).toBe(2)
+    expect(service.getSnapshot().store?.files).toBe(1205)
+    // An event from a backend main has not configured yet carries no store, and none is shown.
+    push({ usedBytes: 0, globalBytes: 512 * MB, generation: 2, seq: 1 })
+    expect(service.getSnapshot().store).toBeUndefined()
+    push({ usedBytes: 0, globalBytes: 0, generation: 0, seq: 0 })
+    expect(service.getSnapshot()).toEqual({ usedBytes: 0, globalBytes: 0 })
+  })
+  it('shows one line in the Search Indexer part, with an icon and the state, and none before the store is configured', async () => {
+    const mounted = await mountIndicator({ indexBytes: 32 * MB, indexBudget: 512 * MB, resultBytes: 1 * MB, resultBudget: 256 * MB })
+    const row = () => mounted.panel().querySelector<HTMLElement>('.memory-row[data-feature="index"]')!
+    expect(row().querySelector('.memory-store')).toBeNull()
+    await act(async () => { mounted.indexMemory.update({ usedBytes: 32 * MB, globalBytes: 512 * MB, generation: 1, seq: 2, store: store() }) })
+    const line = row().querySelector<HTMLElement>('.memory-store')!
+    expect(line.dataset.store).toBe('encrypted')
+    expect(line.querySelector('[data-icon="lock"]')?.getAttribute('aria-hidden')).toBe('true')
+    expect(line.textContent).toBe('Saved on disk1,204 files · 312 MB / 2,048 MBEncrypted')
+    expect(mounted.panel().querySelector('.memory-row[data-feature="results"] .memory-store')).toBeNull()
+    let seq = 2
+    for (const [mode, text, icon] of [['clearText', 'Saved on disk1,204 files · 312 MB / 2,048 MBNot encrypted (your choice in Options)', 'unlock'], ['disabled', 'Saved on diskOff in Options', 'circle-slash'],
+      ['noKeyStore', 'Saved on diskOff: this system has no key store', 'circle-slash'], ['unavailable', 'Saved on diskUnavailable: its folder cannot be used', 'warning']] as const) {
+      await act(async () => { mounted.indexMemory.update({ usedBytes: 32 * MB, globalBytes: 512 * MB, generation: 1, seq: ++seq, store: store({ mode }) }) })
+      expect(row().querySelector<HTMLElement>('.memory-store')!.textContent, mode).toBe(text)
+      expect(row().querySelector<HTMLElement>('.memory-store')!.dataset.store).toBe(mode)
+      expect(row().querySelector(`.memory-store [data-icon="${icon}"]`), mode).not.toBeNull()
+    }
+  })
+  it('draws the line with theme tokens only', () => {
+    const rules = stylesheetRules().filter(rule => rule.selector.includes('.memory-store'))
+    expect(rules.length).toBeGreaterThanOrEqual(3)
+    for (const rule of rules) for (const { value } of rule.declarations) expect(value, rule.selector).not.toMatch(/#[0-9a-f]{3,8}\b|rgb\(|\d+px/i)
+    // Unencrypted and unavailable stand out as warnings; the other states are plain description text.
+    expect(rules.find(rule => rule.selector.includes('[data-store="clearText"]'))?.declarations).toEqual([{ property: 'color', value: 'var(--varia-warningForeground)' }])
+  })
+})
 
 describe('MemoryIndicator live label and quick-free actions', () => {
   it('shows the live combined MB figure beside the rings and falls back to Memory when 0 MB or unavailable', async () => {

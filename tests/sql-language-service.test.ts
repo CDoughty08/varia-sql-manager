@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { SnapshotStore } from '../src/renderer/src/core/store'
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { ApiResult, BackendState, ConnectionInfo, VariaApi } from '../src/shared/contracts'
 import { languageDefinitionSchema, languageLimits, languageRequestSchema, type LanguageCompletions, type LanguageDefinition, type LanguageHover, type LanguageStatus } from '../src/shared/language-service'
@@ -15,12 +16,14 @@ import type { QueryEditorInstance } from '../src/renderer/src/editor/create-edit
 import { fuzzyScore } from 'monaco-editor/base/common/filters.js'
 
 type Scorer = (pattern: string, patternLow: string, patternStart: number, word: string, wordLow: string, wordStart: number) => [number] | undefined
+const labelText = (label: string | Monaco.languages.CompletionItemLabel): string => typeof label === 'string' ? label : label.label
 /** The suggest widget's order: fuzzy score of the typed word against filterText (else label), then sortText. */
 function monacoOrder(suggestions: Monaco.languages.CompletionItem[], typed: string): string[] {
   return suggestions.flatMap(item => {
-    const filter = item.filterText ?? item.label as string
+    const text = labelText(item.label)
+    const filter = item.filterText ?? text
     const score = (fuzzyScore as Scorer)(typed, typed.toLowerCase(), 0, filter, filter.toLowerCase(), 0)
-    return score ? [{ label: item.label as string, score: score[0], sortText: item.sortText ?? '' }] : []
+    return score ? [{ label: text, score: score[0], sortText: item.sortText ?? '' }] : []
   }).sort((a, b) => b.score - a.score || (a.sortText < b.sortText ? -1 : a.sortText > b.sortText ? 1 : 0)).map(item => item.label)
 }
 
@@ -56,7 +59,11 @@ async function fixture(status = configured, withBackend = false) {
     languageDiagnostics: vi.fn<VariaApi['languageDiagnostics']>(async request => ({ ok: true, value: { version: request.version, items: [], isIncomplete: false } })),
     languageRefresh: vi.fn<VariaApi['languageRefresh']>(async () => ({ ok: true, value: { refreshed: true } })),
     languageClose: vi.fn<VariaApi['languageClose']>(async () => ({ ok: true, value: { closed: true } })),
-    languageDefinition: vi.fn<VariaApi['languageDefinition']>(async () => ({ ok: true, value: null }))
+    languageDefinition: vi.fn<VariaApi['languageDefinition']>(async () => ({ ok: true, value: null })),
+    languageLookup: vi.fn<VariaApi['languageLookup']>(async ({ requests }) => ({
+      ok: true,
+      value: { index: 'ready', answers: requests.map(request => ({ state: 'absent', path: [...request.path], items: [], truncated: false })) }
+    }))
   }
   let completion!: Monaco.languages.CompletionItemProvider, hover!: Monaco.languages.HoverProvider, definition!: Monaco.languages.DefinitionProvider
   const unregisterCompletion = vi.fn(), unregisterHover = vi.fn(), unregisterDefinition = vi.fn()
@@ -287,7 +294,7 @@ describe('SQL language editor integration', () => {
     const result = await f.complete(a.id)
     expect(f.api.languageComplete).toHaveBeenCalledWith({ documentId: a.id, version: 1, text: 'SELECT a',
       context: { providerId: 'sqlserver', connectionId: 'connection-a', database: 'catalog-a' }, position: { line: 0, character: 3 } })
-    expect(result.suggestions[0]).toMatchObject({ label: 'Customer', kind: 700 })
+    expect(result.suggestions[0]).toMatchObject({ label: { label: 'Customer' }, kind: 700 })
   })
 
   it('maps UTF-16 positions, snippets and text edits, dropping invalid server ranges', async () => {
@@ -299,11 +306,25 @@ describe('SQL language editor integration', () => {
     ] } })
     const result = await f.complete(tab.id, { lineNumber: 2, column: 4 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[0][0].position).toEqual({ line: 1, character: 3 })
-    expect(result).toEqual({ incomplete: true, suggestions: [{ label: 'Customer', kind: 1400, detail: undefined, documentation: undefined,
+    expect(result).toEqual({ incomplete: true, suggestions: [{ label: { label: 'Customer' }, kind: 1400, detail: undefined, documentation: undefined,
       sortText: '11:Customer', filterText: undefined,
       insertText: '${1:Customer}', insertTextRules: 4, range: { startLineNumber: 2, endLineNumber: 2, startColumn: 1, endColumn: 4 } }] })
     await f.complete(tab.id, { lineNumber: 1, column: 6 } as Monaco.Position)
     expect(f.api.languageComplete.mock.calls[1][0].position).toEqual({ line: 0, character: 5 })
+  })
+
+  it('emits structured CompletionItemLabel with right-aligned description from detail and omits label.detail', async () => {
+    const f = await fixture(), tab = f.documents.create('labels.sql', 'Ord', 'master')
+    f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [
+      { label: 'Orders', kind: 7, detail: 'Table' },
+      { label: 'SELECT', kind: 14, detail: '   ' },
+      { label: 'Customer', kind: 7 }
+    ] } })
+    const result = await f.complete(tab.id)
+    expect(result.suggestions[0]).toMatchObject({ label: { label: 'Orders', description: 'Table' }, detail: 'Table' })
+    expect((result.suggestions[0]!.label as Monaco.languages.CompletionItemLabel).detail).toBeUndefined()
+    expect(result.suggestions[1]!.label).toEqual({ label: 'SELECT' })
+    expect(result.suggestions[2]!.label).toEqual({ label: 'Customer' })
   })
 
   it('ranks fields before general SQL names for equal matches while preserving provider order and bare-name filtering', async () => {
@@ -318,9 +339,9 @@ describe('SQL language editor integration', () => {
     ] } })
     const result = await f.complete(tab.id, { lineNumber: 1, column: 3 } as Monaco.Position)
     const sorted = [...result.suggestions].sort((a, b) => a.sortText! < b.sortText! ? -1 : 1)
-    expect(sorted.map(item => item.label)).toEqual(['hiProperty', 't.hiColumn', 'hiOtherColumn', 'hiFunction', '@@hiGlobal', 'hiKeyword'])
-    expect(result.suggestions.find(item => item.label === 't.hiColumn')).toMatchObject({ filterText: 'hiColumn', sortText: '10:999-column', kind: 500 })
-    expect(result.suggestions.find(item => item.label === '@@hiGlobal')).toMatchObject({ filterText: 'hiGlobal', kind: 600 })
+    expect(sorted.map(item => labelText(item.label))).toEqual(['hiProperty', 't.hiColumn', 'hiOtherColumn', 'hiFunction', '@@hiGlobal', 'hiKeyword'])
+    expect(result.suggestions.find(item => labelText(item.label) === 't.hiColumn')).toMatchObject({ filterText: 'hiColumn', sortText: '10:999-column', kind: 500 })
+    expect(result.suggestions.find(item => labelText(item.label) === '@@hiGlobal')).toMatchObject({ filterText: 'hiGlobal', kind: 600 })
   })
 
   it('puts a case-insensitive exact match first, above case-matching prefixes, system objects and fuzzy matches', async () => {
@@ -334,7 +355,7 @@ describe('SQL language editor integration', () => {
     ] } })
     const result = await f.complete(tab.id, { lineNumber: 1, column: 27 } as Monaco.Position)
     expect(result.incomplete).toBe(true)
-    expect(result.suggestions.find(item => item.label === '[OrderDetails]')).toMatchObject({ filterText: 'orderdetails', sortText: '01:[OrderDetails]' })
+    expect(result.suggestions.find(item => labelText(item.label) === '[OrderDetails]')).toMatchObject({ filterText: 'orderdetails', sortText: '01:[OrderDetails]' })
     expect(monacoOrder(result.suggestions, 'orderdetails')[0]).toBe('[OrderDetails]')
   })
 
@@ -348,7 +369,7 @@ describe('SQL language editor integration', () => {
     f.model(tab.id).applyEdits([{ range: { startLineNumber: 1, startColumn: 16, endLineNumber: 1, endColumn: 16 }, text: 'rders' }])
     const grown = await f.completion.provideCompletionItems(f.model(tab.id), { lineNumber: 1, column: 21 } as Monaco.Position, { triggerKind: 2 }, token()) as Monaco.languages.CompletionList
     expect(f.api.languageComplete).toHaveBeenCalledOnce()
-    expect(grown.suggestions.find(suggestion => suggestion.label === 'Orders')).toMatchObject({ filterText: 'orders', sortText: '01:Orders',
+    expect(grown.suggestions.find(suggestion => labelText(suggestion.label) === 'Orders')).toMatchObject({ filterText: 'orders', sortText: '01:Orders',
       range: { startLineNumber: 1, startColumn: 15, endLineNumber: 1, endColumn: 21 } })
     expect(monacoOrder(grown.suggestions, 'orders')[0]).toBe('Orders')
     // Anything but identifier characters typed at the cursor, or a newer epoch, asks the backend.
@@ -385,7 +406,7 @@ describe('SQL language editor integration', () => {
     const range = { start: { line: 0, character: 14 }, end: { line: 0, character: 19 } }
     f.api.languageComplete.mockResolvedValueOnce({ ok: true, value: { isIncomplete: false, items: [{ label: 'Customers', kind: 7, textEdit: { range, newText: 'Customers' } }] } })
     const result = await f.complete(tab.id, { lineNumber: 1, column: 20 } as Monaco.Position)
-    expect(result.suggestions[0]).toMatchObject({ label: 'Customers', filterText: '[Customers' })
+    expect(result.suggestions[0]).toMatchObject({ label: { label: 'Customers' }, filterText: '[Customers' })
     expect(monacoOrder(result.suggestions, '[Cust')).toEqual(['Customers'])
   })
 
@@ -405,7 +426,7 @@ describe('SQL language editor integration', () => {
       { label: '[bob].[columnName]', kind: 5, filterText: 'columnName', insertText: '[bob].[columnName]', textEdit: { range, newText: '[bob].[columnName]' } }
     ] } })
     const result = await f.complete(tab.id, { lineNumber: 1, column: 12 } as Monaco.Position)
-    expect(result.suggestions[0]).toMatchObject({ label: '[bob].[columnName]', insertText: '[bob].[columnName]', filterText: '[columnName' })
+    expect(result.suggestions[0]).toMatchObject({ label: { label: '[bob].[columnName]' }, insertText: '[bob].[columnName]', filterText: '[columnName' })
     expect(monacoOrder(result.suggestions, '[col')).toEqual(['[bob].[columnName]'])
   })
 
@@ -596,7 +617,7 @@ describe('SQL language editor integration', () => {
     expect(await f.complete(tab.id)).toEqual({ suggestions: [], incomplete: true })
     expect(f.api.languageComplete).toHaveBeenCalledTimes(2)
     latestAnswer.resolve({ ok: true, value: { items: [{ label: 'Latest suggestion' }], isIncomplete: false } })
-    expect((await latest).suggestions.map(item => item.label)).toEqual(['Latest suggestion'])
+    expect((await latest).suggestions.map(item => labelText(item.label))).toEqual(['Latest suggestion'])
     expect(latestToken.listenerCount()).toBe(0)
   })
 
@@ -726,7 +747,7 @@ describe('SQL language editor integration', () => {
     expect(f.api.languageComplete).toHaveBeenCalledTimes(1)
     dispatch.resolve()
     expect((await old).suggestions).toEqual([])
-    expect((await latest).suggestions.map(item => item.label)).toEqual(['other'])
+    expect((await latest).suggestions.map(item => labelText(item.label))).toEqual(['other'])
     expect(events).toEqual(['close:undefined', 'open:master', 'close:master', 'open:other'])
     expect(backendDatabase).toBe('other')
   })
@@ -1241,7 +1262,7 @@ describe('SQL language features in Peek', () => {
     expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek)
     // A query tab still gets completion and hover.
     const tab = f.documents.create('query.sql', 'SELECT Cus', 'master')
-    expect((await f.complete(tab.id)).suggestions.map(item => item.label)).toEqual(['Customer'])
+    expect((await f.complete(tab.id)).suggestions.map(item => labelText(item.label))).toEqual(['Customer'])
     const queryHover = f.getHover(tab.id)
     await landed(() => expect(f.api.languageHover).toHaveBeenCalledTimes(pendingLimits.peek + 1))
     replies.at(-1)!.resolve({ ok: true, value: { contents: 'Customer table' } })
@@ -1340,5 +1361,172 @@ describe('SQL language features in Peek', () => {
     expect(await f.service.definition(f.model(tab.id), { lineNumber: 1, column: 20 } as Monaco.Position)).toEqual({ connectionId: 'sql-1', definition: found })
     expect(f.api.languageDefinition).toHaveBeenCalledOnce()
     expect(f.api.languageDefinition.mock.calls[0]![0]).toMatchObject({ context: { connectionId: 'sql-1', database: 'Sales' } })
+  })
+})
+
+describe('SQL Server lazy schema preview drawer (resolveCompletionItem)', () => {
+  it('enriches STS table completion items from local IndexLookup via language.lookup with PK/UK/Identity, indexes, and FKs', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    const tab = f.documents.create('q.sql', 'SELECT * FROM dbo.Ord', 'SalesDB', 'sql-1')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: '[Orders]', kind: 7, detail: 'Table', filterText: 'Orders', insertText: '[Orders]' },
+          { label: 'ORDER', kind: 14, detail: 'Keyword' }
+        ]
+      }
+    })
+    f.api.languageLookup.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: [{
+          state: 'ready',
+          path: ['SalesDB', 'dbo', 'Orders'],
+          truncated: false,
+          object: { name: 'Orders', kind: 'table', detailed: true },
+          items: [
+            { name: 'OrderId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+            { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+            { name: 'PK_Orders', kind: 'key', subtype: 'primary', detail: '(OrderId)' },
+            { name: 'IX_Orders_Customer', kind: 'index', subtype: 'nonclustered', detail: '(CustomerId)' },
+            { name: 'FK_Orders_Customers', kind: 'foreignKey', subtype: 'outgoing', detail: '(CustomerId) → dbo.Customers(Id)' }
+          ]
+        }]
+      }
+    })
+
+    const list = await f.complete(tab.id, { lineNumber: 1, column: 22 } as Monaco.Position)
+    const orders = list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === '[Orders]')!
+    const keyword = list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === 'ORDER')!
+
+    const resolved = (await f.completion.resolveCompletionItem!(orders, token()))!
+    expect(f.api.languageLookup).toHaveBeenCalledWith({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', 'dbo', 'Orders'], limit: 2000, details: true }]
+    })
+    expect(resolved.documentation).toMatchObject({ isTrusted: false, supportHtml: false })
+    const md = (resolved.documentation as Monaco.IMarkdownString).value
+    expect(md).toContain('**dbo\\.Orders** · Table')
+    expect(md).toContain('\\[SalesDB\\]\\.\\[dbo\\]\\.\\[Orders\\]')
+    expect(md).toContain('| OrderId | int · NOT NULL · PK · IDENTITY |')
+    expect(md).toContain('FK\\_Orders\\_Customers'.replace('FK\\_Orders\\_Customers', '→ \\(CustomerId\\) → dbo\\.Customers\\(Id\\)'))
+
+    // Second resolve hits LookupCache (0 extra IPC calls); keywords are never looked up.
+    await f.completion.resolveCompletionItem!(orders, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(1)
+    expect(await f.completion.resolveCompletionItem!(keyword, token())).toBe(keyword)
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(1)
+
+    // Refresh Local Cache invalidates the SQL Server lookup cache.
+    await f.service.refreshCache(tab.id)
+    f.api.languageLookup.mockResolvedValueOnce({
+      ok: true,
+      value: { index: 'ready', answers: [{ state: 'absent', path: ['SalesDB', 'dbo', 'Orders'], items: [], truncated: false }] }
+    })
+    const afterRefresh = await f.completion.resolveCompletionItem!(orders, token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(2)
+    expect(afterRefresh).toBe(orders)
+  })
+
+  it('preserves existing STS documentation, filters non-object/mismatched kinds, splits bracketed/dotted/db.. names, and invalidates on indexState updates', async () => {
+    const f = await fixture()
+    f.addConnection('sql-1')
+    type IndexStateSnap = { readonly indexes: Readonly<Record<string, { readonly requestId?: string; readonly status?: { readonly state: 'none' | 'building' | 'ready'; readonly builtAt?: string; readonly databases: number; readonly indexed: number; readonly objects: number; readonly modules: number; readonly cut: number; readonly skipped: readonly { readonly database: string; readonly code: string; readonly message: string }[]; readonly definitions: boolean } }>> }
+    class MutableIndexStateStore extends SnapshotStore<IndexStateSnap> {
+      set(next: IndexStateSnap): void { this.publish(next) }
+    }
+    const indexState = new MutableIndexStateStore({ indexes: {} })
+    f.service.bindIndexState(indexState)
+
+    const tab = f.documents.create('q2.sql', 'SELECT * FROM OtherDB..Ord', 'SalesDB', 'sql-1')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: '[Orders]', kind: 7, detail: 'Table', documentation: 'Orders extended doc', insertText: '[Orders]' },
+          { label: 'dbo', kind: 9, detail: 'Schema', documentation: 'Schema doc' },
+          { label: 'PlainText', kind: 1, documentation: 'Text doc' },
+          { label: 'MyEvent', kind: 23, documentation: 'Event doc' },
+          { label: 'Orders', kind: 3, detail: 'Function', documentation: 'Built-in function doc' }
+        ]
+      }
+    })
+    f.api.languageLookup.mockResolvedValue({
+      ok: true,
+      value: {
+        index: 'ready',
+        answers: [{
+          state: 'ready',
+          path: ['OtherDB', 'dbo', 'Orders'],
+          truncated: false,
+          object: { name: 'Orders', kind: 'table', detailed: true },
+          items: [{ name: 'Id', kind: 'column', type: 'int', nullable: false, detail: 'PK' }]
+        }]
+      }
+    })
+
+    const list = await f.complete(tab.id, { lineNumber: 1, column: 27 } as Monaco.Position)
+    const byLabel = (name: string) => list.suggestions.find(s => (typeof s.label === 'string' ? s.label : s.label.label) === name)!
+
+    // db..table qualifier resolves against OtherDB with schema '*', and preserves existing STS documentation.
+    const resolved = (await f.completion.resolveCompletionItem!(byLabel('[Orders]'), token()))!
+    expect(f.api.languageLookup).toHaveBeenCalledWith({
+      connectionId: 'sql-1',
+      requests: [{ path: ['OtherDB', '*', 'Orders'], limit: 2000, details: true }]
+    })
+    const md = (resolved.documentation as Monaco.IMarkdownString).value
+    expect(md).toContain('**dbo\\.Orders** · Table')
+    expect(md).toContain('---')
+    expect(md).toContain('Orders extended doc')
+
+    // Non-object kinds (1 Text, 9 Module, 23 Event) are skipped; kind 3 Function never clobbers when IndexLookup returns a table.
+    expect(await f.completion.resolveCompletionItem!(byLabel('dbo'), token())).toBe(byLabel('dbo'))
+    expect(await f.completion.resolveCompletionItem!(byLabel('PlainText'), token())).toBe(byLabel('PlainText'))
+    expect(await f.completion.resolveCompletionItem!(byLabel('MyEvent'), token())).toBe(byLabel('MyEvent'))
+    const fnItem = byLabel('Orders')
+    expect(await f.completion.resolveCompletionItem!(fnItem, token())).toBe(fnItem)
+    expect(fnItem.documentation).toBe('Built-in function doc')
+
+    // Bracketed multi-part labels (`[dbo].[Orders]`) and dotted table names (`[Sales.Orders]`) split before unquoting.
+    const tabMulti = f.documents.create('q3.sql', 'SELECT * FROM ', 'SalesDB', 'sql-1')
+    f.api.languageComplete.mockResolvedValueOnce({
+      ok: true,
+      value: {
+        isIncomplete: false,
+        items: [
+          { label: '[dbo].[Orders]', kind: 7 },
+          { label: '[Sales.Orders]', kind: 7, filterText: 'Sales.Orders' }
+        ]
+      }
+    })
+    const multiList = await f.complete(tabMulti.id, { lineNumber: 1, column: 15 } as Monaco.Position)
+    const callsBefore = f.api.languageLookup.mock.calls.length
+    await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
+    await f.completion.resolveCompletionItem!(multiList.suggestions[1], token())
+    expect(f.api.languageLookup.mock.calls[callsBefore][0]).toEqual({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', 'dbo', 'Orders'], limit: 2000, details: true }]
+    })
+    expect(f.api.languageLookup.mock.calls[callsBefore + 1][0]).toEqual({
+      connectionId: 'sql-1',
+      requests: [{ path: ['SalesDB', '*', 'Sales.Orders'], limit: 2000, details: true }]
+    })
+
+    // Search Objects indexState update immediately clears lookupCaches for that connection.
+    const callsAfterCache = f.api.languageLookup.mock.calls.length
+    await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(callsAfterCache)
+    indexState.set({
+      indexes: {
+        'sql-1': { status: { state: 'ready', builtAt: '2026-11-27T12:00:00Z', databases: 1, indexed: 1, objects: 5, modules: 0, cut: 0, skipped: [], definitions: true } }
+      }
+    })
+    await f.completion.resolveCompletionItem!(multiList.suggestions[0], token())
+    expect(f.api.languageLookup).toHaveBeenCalledTimes(callsAfterCache + 1)
   })
 })

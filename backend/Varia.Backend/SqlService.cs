@@ -35,14 +35,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "system.health", "connections.connect", "connections.databases", "connections.discover", "connections.preview", "connections.disconnect",
         "connections.identity",
         "databases.list", "tables.columns", "query.execute", "query.executeMulti", "query.cancel", "query.session.close", "query.session.state",
-        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "results.combine", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.dependencies", "explorer.index", "explorer.search", "results.copy", "results.export",
+        "results.visibility", "results.read", "results.close", "results.rowBytes", "results.view", "results.viewClose", "results.identify", "results.rowIds", "results.findRows", "results.diff", "results.search", "results.profile", "results.pivot", "results.combine", "explorer.children", "explorer.peek", "explorer.peekDependencies", "explorer.peekDefinition", "explorer.dependencies", "explorer.index", "explorer.indexStatus", "explorer.search", "results.copy", "results.export",
         "results.setMemoryLimit", "results.distinct", "results.distinctRead", "results.distinctTick", "results.distinctClose",
         "scripting.script", "actions.describe", "actions.script", "actions.execute",
         "entra.cache.clear", "live.subscribe", "live.update", "activity.details", "activity.kill",
         "ssis.describe", "ssis.execute", "ssis.catalogSetup", "ssis.execution", "ssis.packageRuns",
         "bigquery.account", "bigquery.projects", "bigquery.connectionProjects", "bigquery.dryRun", "bigquery.properties", "bigquery.indexEstimate", "agent.profile", "agent.historyMessage", "agent.errorLogs", "agent.counterValues", "results.remoteQuery",
         "query.attach", "bigquery.endIdleSessions", "bigquery.cancelJobs", "bigquery.jobs.get", "bigquery.jobs.cancel",
-        "results.diffSeek", "language.parse", "language.lookup"
+        "results.diffSeek", "language.parse", "language.lookup", "language.hydrate", "explorer.indexStore.configure", "explorer.indexStore.clear"
     ];
     /// <summary>Synthetic results for tests and benchmarks; it exists only with VARIA_BACKEND_TEST_HOOKS=1.</summary>
     public const string SynthesizeMethod = "debug.results.synthesize";
@@ -151,6 +151,9 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     /// <summary>Orders memory reports (events and summary budgets) for this process; main pairs it with the generation.</summary>
     private long memorySeq;
     private long reportedIndexBytes = -1;
+    /// <summary>The index's limit as last sent: a build that changes it (explorer.index's memoryLimitMiB) sends a report.</summary>
+    private long reportedIndexLimit = -1;
+    private long reportedStoreChanges = -1;
     private long indexMemorySeq;
     private long reportedIndexFinished = -1;
     /// <summary>The index detail last sent: a walk whose event was refused is still unsent, so the next check sends it.</summary>
@@ -326,6 +329,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         explorer = new ExplorerService(this);
         definitions = new DefinitionService(this);
         search = new ObjectSearchService(this);
+        this.bigQuery.ObjectDetails = search;
         scripting = new ScriptingService(this);
         actions = new ActionService(this, catalog: actionsCatalog);
         ssis = new SsisService(this);
@@ -513,13 +517,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
     {
         "query.execute" or "query.executeMulti" or "plans.estimate" or "results.remoteQuery" or "query.attach" => RequestLane.Query,
         "results.read" or "results.copy" or "results.export" or "results.view" or "results.identify" or "results.findRows" or "results.diff" or "results.search" or "results.profile" or "results.pivot" or "results.combine" or "results.distinct" or "results.distinctRead" or "results.distinctTick" or "results.diffSeek" => RequestLane.Results,
-        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
+        "explorer.children" or "explorer.peek" or "explorer.peekDependencies" or "explorer.peekDefinition" or "explorer.dependencies" or "explorer.index" or "explorer.indexStatus" or "explorer.search" or "agent.profile" => RequestLane.Explorer,
         "actions.execute" => RequestLane.Actions,
         "ssis.describe" or "ssis.execute" or "ssis.catalogSetup" or "ssis.execution" or "ssis.packageRuns" => RequestLane.Ssis,
         "live.subscribe" or "activity.details" => RequestLane.Live,
         // Kill Process takes no metadata slot: it runs at once under its own gates, as object actions do under theirs.
         "activity.kill" => RequestLane.Actions,
-        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "bigquery.jobs.cancel" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear"
+        "system.health" or "connections.disconnect" or "bigquery.account" or "bigquery.projects" or "bigquery.endIdleSessions" or "bigquery.cancelJobs" or "bigquery.jobs.cancel" or "query.cancel" or "query.session.close" or "query.session.state" or "results.close" or "results.rowBytes" or "results.viewClose" or "results.distinctClose" or "results.rowIds" or "results.setMemoryLimit" or "results.visibility" or "entra.cache.clear" or "explorer.indexStore.configure" or "explorer.indexStore.clear"
             or "live.update" or "language.status" or "language.refresh" or "language.close" => RequestLane.Control,
         SynthesizeMethod when hooks => RequestLane.Metadata,
         _ when Array.IndexOf(MethodNames, method) < 0 => RequestLane.Control,
@@ -531,7 +535,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
 
     /// <summary>The methods whose frames may carry a password or a sensitive value: methodPolicies' sensitive entries
     /// (tests/validation.test.ts compares the two lists), zeroed here as main zeroes its copy.</summary>
-    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects", "bigquery.cancelJobs"];
+    internal static readonly string[] SensitiveMethods = ["connections.connect", "connections.databases", "connections.preview", "ssis.execute", "actions.execute", "bigquery.account", "bigquery.projects", "bigquery.cancelJobs", "explorer.indexStore.configure"];
     public bool Sensitive(string method) => Array.IndexOf(SensitiveMethods, method) >= 0;
 
     /// <summary>The result memory budget: global, and the most one query may use.</summary>
@@ -659,6 +663,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "explorer.index" => Read<ObjectIndexArgs>(parameters, json) is var indexArgs && bigQuery.Owns(indexArgs.ConnectionId)
             ? await search.IndexBigQueryAsync(indexArgs, bigQuery, Token(context), context is null ? null : value => context.SendEvent(value, droppable: true))
             : await search.IndexAsync(SqlServerIndexArgs(indexArgs), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
+        "explorer.indexStatus" => Read<ObjectIndexStatusArgs>(parameters, json) is var statusArgs && bigQuery.Owns(statusArgs.ConnectionId)
+            ? search.IndexStatus(statusArgs, bigQuery: true) : search.IndexStatus(statusArgs),
         "explorer.search" => Read<ObjectSearchArgs>(parameters, json) is var searchArgs && bigQuery.Owns(searchArgs.ConnectionId)
             ? search.Search(searchArgs, Token(context), bigQuery: true) : search.Search(searchArgs, Token(context)),
         "scripting.script" => Read<ScriptArgs>(parameters, json) is var scriptArgs && bigQuery.Owns(scriptArgs.ConnectionId)
@@ -668,6 +674,8 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         // A long step's 3211 progress goes out as droppable action.progress EVENTs on the request (ActionProgress).
         "actions.execute" => await ExecuteActionWithLanguagePausedAsync(Read<ActionArgs>(parameters, json), Token(context), context is null ? null : value => context.SendEvent(value, droppable: true)),
         "entra.cache.clear" => ClearEntra(Read<EntraCacheArgs>(parameters, json)),
+        "explorer.indexStore.configure" => ConfigureIndexStore(Read<IndexStoreConfigureArgs>(parameters, json)),
+        "explorer.indexStore.clear" => await ClearIndexStoreAsync(Read<IndexStoreClearArgs>(parameters, json)),
         "ssis.describe" => await ssis.DescribeAsync(Read<SsisDescribeArgs>(parameters, json), Token(context)),
         "ssis.execute" => await ssisActions.ExecuteAsync(Read<SsisExecuteArgs>(parameters, json), Token(context)),
         "ssis.catalogSetup" => await ssis.CatalogSetupAsync(Read<SsisCatalogSetupArgs>(parameters, json), Token(context)),
@@ -683,23 +691,42 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         "agent.counterValues" => await actions.CounterValuesAsync(Read<AgentCounterValuesArgs>(parameters, json), Token(context)),
         "language.parse" => await StepParser.ParseAsync(Read<LanguageParseArgs>(parameters, json), Token(context)),
         "language.lookup" => LookupIndex(Read<LanguageLookupArgs>(parameters, json)),
+        "language.hydrate" => await HydrateIndexAsync(Read<LanguageHydrateArgs>(parameters, json), Token(context)),
         SynthesizeMethod when hooks => Synthesize(Read<SynthesizeArgs>(parameters, json), Token(context)),
         _ => throw new RequestException("METHOD_NOT_FOUND", "Unsupported backend method.")
     };
 
-    /// <summary>language.lookup: the editor's completion and hover read a BigQuery connection's index in process, from one snapshot
-    /// (CheckProvider has refused any handle BigQuery does not own, a closed one included, with UNSUPPORTED_PROVIDER).</summary>
+    /// <summary>language.lookup: the editor's completion, hover and lazy schema preview drawer read the connection's Search Objects index
+    /// in process, from one snapshot (both BigQuery and SQL Server).</summary>
     private LanguageLookupResult LookupIndex(LanguageLookupArgs args)
     {
         EditorLookup.Validate(args);
-        var billing = ((IBigQueryIndexSource)bigQuery).BillingProject(args.ConnectionId);
-        return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing), args);
+        if (bigQuery.Owns(args.ConnectionId))
+        {
+            var billing = ((IBigQueryIndexSource)bigQuery).BillingProject(args.ConnectionId);
+            return EditorLookup.Answer(search.LookupBigQuery(args.ConnectionId, billing), args);
+        }
+        _ = Profile(args.ConnectionId);
+        return EditorLookup.Answer(search.Lookup(args.ConnectionId), args);
+    }
+
+    /// <summary>language.hydrate: free on-demand tables.get / routines.get schema hydration for referenced BigQuery objects.</summary>
+    private Task<LanguageHydrateResult> HydrateIndexAsync(LanguageHydrateArgs args, CancellationToken token) =>
+        search.HydrateBigQueryAsync(args, bigQuery, token);
+
+    /// <summary>Marks the Search Objects index of a SQL Server connection stale in the database a script began in and the one it
+    /// ended in (a USE between them), when its text may have changed objects (<see cref="TsqlChanges"/>). Free: nothing is read.</summary>
+    private void MarkIndexStale(string connectionId, string sql, string? started, string? ended)
+    {
+        if (!TsqlChanges.MayChangeObjects(sql)) return;
+        if (started is { Length: > 0 }) search.MarkSqlStale(connectionId, started);
+        if (ended is { Length: > 0 } && ended != started) search.MarkSqlStale(connectionId, ended);
     }
 
     /// <summary>explorer.index for SQL Server: BigQuery's refresh options are refused.</summary>
     private static ObjectIndexArgs SqlServerIndexArgs(ObjectIndexArgs args) =>
-        args.StarredProjects is null && args.AllProjects is null && args.MaxProjects is null && args.Scope is null && args.MissingOnly is null && args.Stale is null && args.Bulk is null ? args
-        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: starredProjects, allProjects, maxProjects, scope, missingOnly, stale and bulk are BigQuery's.");
+        args.StarredProjects is null && args.AllProjects is null && args.MaxProjects is null && args.Scope is null && args.MissingOnly is null && args.Bulk is null ? args
+        : throw new RequestException("INVALID_PARAMS", "Invalid object index request: starredProjects, allProjects, maxProjects, scope, missingOnly and bulk are BigQuery's.");
 
     private static T Read<T>(JsonElement value, JsonSerializerOptions json) => value.Deserialize<T>(json)
         ?? throw new RequestException("INVALID_PARAMS", "Parameters are required.");
@@ -930,6 +957,31 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             throw;
         }
     }
+
+    /// <summary>explorer.indexStore.configure, which only main sends, as each backend becomes ready and when its settings
+    /// change: where the saved Search Objects index lives, under which key, and within what limit (<see cref="IndexStore.Configure"/>).
+    /// The Memory panel's figure follows by an explorer.index.memory event.</summary>
+    private IndexStoreStatus ConfigureIndexStore(IndexStoreConfigureArgs args)
+    {
+        var status = search.Store.Configure(args);
+        ReportIndexMemory(wait: false);
+        return status;
+    }
+
+    /// <summary>explorer.indexStore.clear (Clear Saved Search Indexes): every file of the saved index is deleted; the indexes
+    /// held in memory stay, and their next builds save again.</summary>
+    private async Task<object> ClearIndexStoreAsync(IndexStoreClearArgs _)
+    {
+        // Not configured yet (main waits for its settings, or for a key store that has not answered): the backend does not know
+        // the folder, and "nothing to clear" would not be true.
+        if (!search.Store.Configured) throw new RequestException("NOT_READY", "The saved search indexes cannot be cleared yet: Varia is still waiting for the system key store or its settings. Nothing was deleted.");
+        var cleared = await search.Store.ClearAsync();
+        ReportIndexMemory(wait: false);
+        return cleared;
+    }
+
+    string? IObjectSearchHost.HomeDatabase(string connectionId) =>
+        connections.TryGetValue(connectionId, out var connectionString) ? DatabaseOf(connectionId, connectionString) : null;
 
     /// <summary>Help › Clear Entra ID Token Cache.</summary>
     private object ClearEntra(EntraCacheArgs _)
@@ -1337,7 +1389,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
         if (bigQuery.Find(args.ConnectionId) is { } bigQueryConnection)
             return args.Preview is { } preview ? await PreviewBigQueryAsync(args, preview, bigQueryConnection, context) : await ExecuteBigQueryAsync(args, bigQueryConnection, context);
         if (args.Preview is not null) throw new RequestException("INVALID_PARAMS", "Preview Rows through tabledata.list applies only to BigQuery connections.");
-        if (args.Dataset is not null) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
+        if (args.Dataset is not null || args.NoDefaultDataset) throw new RequestException("INVALID_PARAMS", "A dataset applies only to BigQuery connections.");
         if (args.MaximumBytesBilled is not null || args.Prices is not null) throw new RequestException("INVALID_PARAMS", "Maximum bytes billed and prices apply only to BigQuery connections.");
         if (args.Residence is not null || args.WindowCacheMiB is not null) throw new RequestException("INVALID_PARAMS", "Result residence and the window cache apply only to BigQuery connections.");
         Name(args.Database);
@@ -1426,8 +1478,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 : "Line " + item.LineNumber;
             return "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + ", " + location + "\n" + item.Message;
         }
-        Microsoft.Data.SqlClient.SqlInfoMessageEventHandler onInfo = (_, e) =>
+        Microsoft.Data.SqlClient.SqlInfoMessageEventHandler onInfo = (sender, e) =>
         {
+            // onInfo subscribes before each batch attaches StatementStop; mark the batch streaming before messages.Add
+            // can publish a live message event that triggers Stop from another thread.
+            if (sender is SqlConnection source) ActionService.StatementStop.NoteMessage(source);
             // With FireInfoMessageEventOnUserErrors, severity 11-16 errors arrive here instead of aborting the reader,
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
@@ -1581,7 +1636,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     // cancels inside the next message instead. So the token reaches no SqlClient call of the batch: SqlClient's
                     // own registration would cancel from another thread too, and the two together deadlock.
                     var statementStop = new ActionService.StatementStop(command, token);
-                    connection.InfoMessage += statementStop.OnMessage;
+                    statementStop.Attach(connection);
                     using var stop = token.UnsafeRegister(static state => ((ActionService.StatementStop)state!).FromOtherThread(), statementStop);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
@@ -1759,7 +1814,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     finally
                     {
                         if (reader is not null) await reader.DisposeAsync();
-                        connection.InfoMessage -= statementStop.OnMessage;
+                        statementStop.Detach(connection);
                     }
                     // Now and then (about once in 600 of the live check's timed WAITFORs under load) SqlClient ends a cancelled
                     // batch's reader as if the batch had finished and raises no "Operation cancelled", though SQL Server
@@ -1936,10 +1991,13 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 : "Stopped at batch " + batchNumber + (repeated ? ", repetition " + iteration : "") + "; " + completed + " of " + totalBatches + " batch executions completed.");
         }
         if (context is not null) context.Unsent = () => store.Release(descriptors.Concat(plans).Select(set => set.ResultId));
+        // DDL the script may have run marks the databases it ran in stale: the index checks them at its next use (docs/object-search.md, Freshness).
+        if (completed > 0 || batchNumber > 0) MarkIndexStale(args.ConnectionId, args.Sql, args.Database, database);
         var completedAt = DateTimeOffset.Now.ToString("yyyy-MM-ddTHH:mm:ss.fffffffzzz", CultureInfo.InvariantCulture);
         return new(descriptors, tally.Discarded, output, recordsAffected, watch.ElapsedMilliseconds, status, failure, completed,
             totalBatches, database, messages.Truncated, SummaryBudget(budget?.StoppedBytes), completedAt, spid, login, plans.Count > 0 ? plans : null, planOrder,
-            statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null));
+            statisticsSample ?? (args.IncludeClientStatistics ? new([], null, "Execution ended before statistics collection could start.") : null),
+            IndexStale: search.StaleMarkOf(args.ConnectionId));
     }
 
     private bool StoreActualPlans(string sessionId, List<ActualPlanCapture.CapturedPlan> captured, Dictionary<int, uint>? idsByEvent, List<ResultDescriptor> plans)
@@ -3302,11 +3360,14 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
             var forgets = search.Forgets;
             IndexCountersRead?.Invoke();
             var used = search.MemoryUsed;
+            var limit = search.Budget.Limit;
+            // The saved index's figures ride the same event: files written or swept since the last one send it again.
+            var storeChanges = search.Store.Changes;
             var now = IndexDetailClock();
             // A read held changes no byte (its records and texts were charged while it ran), so a last walk that still shows
             // reading is walked again once the interval has passed, though nothing else moved.
             var due = walkedIndexDetail is { Detail.ReadingBytes: > 0 } last && now - last.WalkedAt >= IndexDetailWalkMs;
-            var sent = used == reportedIndexBytes && finished == reportedIndexFinished;
+            var sent = used == reportedIndexBytes && finished == reportedIndexFinished && limit == reportedIndexLimit && storeChanges == reportedStoreChanges;
             if (publish is null || sent && !due && ReferenceEquals(walkedIndexDetail?.Detail, reportedIndexDetail)) return;
             // The last walk still holds while the budget's use is the same and no build ended and no index was dropped since: a
             // search, or a refused event's retry, only refreshes the times. Between walks, at most every few seconds, a budget at or
@@ -3333,9 +3394,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 walkedIndexDetail = (used, builds, forgets, reportedIndexDetail!, walkedAt, walkedUsed);
                 return;
             }
-            if (!publish(new IndexMemoryEvent(used, search.Limits.MemoryBytes, indexMemorySeq + 1, detail))) return;
+            if (!publish(new IndexMemoryEvent(used, limit, indexMemorySeq + 1, detail, search.Store.Status))) return;
+            reportedStoreChanges = storeChanges;
             indexMemorySeq++;
             reportedIndexBytes = used;
+            reportedIndexLimit = limit;
             reportedIndexFinished = finished;
             reportedIndexDetail = detail;
         }

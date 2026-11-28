@@ -51,7 +51,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     if (!this.disposed && (error !== current.error || kind !== current.kind)) this.publish({ error, kind })
   }
   /** Save All: a document task, and some document it saves has unsaved changes. */
-  canSaveAll(): boolean { return this.canRun() && this.documents.getSnapshot().documents.some(document => document.dirty && this.documents.inSaveAll(document.id)) }
+  canSaveAll(): boolean { return this.canRun() && this.documents.getSnapshot().documents.some(document => this.documents.hasUnsavedEdits(document.id) && this.documents.inSaveAll(document.id)) }
   clearError(): void { this.reportError('') }
   /** Resolves once no file task runs, or on disposal. */
   private idle(): Promise<void> {
@@ -232,7 +232,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     await this.perform(async () => {
       for (const { id } of this.documents.getSnapshot().documents) {
         if (this.disposed) return
-        if (!this.documents.get(id)?.dirty || !this.documents.inSaveAll(id)) continue
+        if (!this.documents.hasUnsavedEdits(id) || !this.documents.inSaveAll(id)) continue
         if (!await this.documents.save(id)) return
       }
     })
@@ -255,17 +255,17 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     const document = this.documents.get(id), refusal = this.documents.closeRefusal(id)
     // A table designer that is saving cannot close until its save ends or is stopped.
     if (refusal) throw new Error(refusal)
-    if (!document?.dirty) return true
-    const revision = this.documents.revision(id), noun = document.kind === 'tableDesigner' ? 'table' : document.kind === 'databaseProperties' ? 'database properties' : document.kind === 'tableProperties' ? 'table properties' : document.kind === 'agentJob' ? 'job' : document.kind === 'agentAlert' ? 'alert' : document.kind === 'agentOperator' ? 'operator' : document.kind === 'agentOperators' ? 'notifications' : document.kind === 'agentSchedules' ? 'schedule' : document.kind === 'agentProxy' ? 'proxy' : document.kind === 'credential' ? 'credential' : 'query'
+    if (!document || !this.documents.hasUnsavedEdits(id)) return true
+    const revision = this.documents.editRevision(id), noun = document.kind === 'tableDesigner' ? 'table' : document.kind === 'databaseProperties' ? 'database properties' : document.kind === 'tableProperties' ? 'table properties' : document.kind === 'agentJob' ? 'job' : document.kind === 'agentAlert' ? 'alert' : document.kind === 'agentOperator' ? 'operator' : document.kind === 'agentOperators' ? 'notifications' : document.kind === 'agentSchedules' ? 'schedule' : document.kind === 'agentProxy' ? 'proxy' : document.kind === 'credential' ? 'credential' : 'query'
     const decision = unwrap(await this.api.confirmClose(document.name))
     if (this.disposed || decision === 'cancel') return false
     if (!this.documents.get(id)) return true
     if (decision === 'save') {
       if (!await this.documents.save(id)) return false
-      if (this.documents.get(id)?.dirty) throw new Error(`The ${noun} changed while saving. Review the latest changes before closing it.`)
+      if (this.documents.hasUnsavedEdits(id)) throw new Error(`The ${noun} changed while saving. Review the latest changes before closing it.`)
       return true
     }
-    if (this.documents.revision(id) !== revision) throw new Error(`The ${noun} changed while confirming close. Review the latest changes before closing it.`)
+    if (this.documents.editRevision(id) !== revision) throw new Error(`The ${noun} changed while confirming close. Review the latest changes before closing it.`)
     return true
   }
   /** The disconnect coordinator holds the document task. All save choices finish before any session or tab ends. */
@@ -277,7 +277,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       if (!await this.confirmClose(id) || this.disposed) return undefined
       const current = this.documents.get(id)
       if (!current) throw new Error('The affected query tabs changed. Review the disconnect again.')
-      approved.push({ document: current, revision: this.documents.revision(id) })
+      approved.push({ document: current, revision: this.documents.editRevision(id) })
     }
     const plan = { documents: approved }
     this.validateQueryClose(plan)
@@ -285,7 +285,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
   }
   /** Identity catches database/target/name/file/dirty changes as well as edits that Monaco's revision catches. */
   validateQueryClose(plan: PreparedQueryClose): void {
-    if (this.disposed || plan.documents.some(({ document, revision }) => this.documents.get(document.id) !== document || this.documents.revision(document.id) !== revision))
+    if (this.disposed || plan.documents.some(({ document, revision }) => this.documents.get(document.id) !== document || this.documents.editRevision(document.id) !== revision))
       throw new Error('A query changed while confirming disconnect. Review the latest changes before disconnecting.')
   }
   /** After transport teardown, close locally through DocumentService's normal events, then release unclaimed files. */
@@ -305,10 +305,10 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
     await this.perform(async () => {
       if (!await this.confirmClose(id) || this.disposed) return
       // The editor stays editable while the session prompt is read and answered; edits made meanwhile were not confirmed.
-      const approved = this.documents.revision(id)
+      const approved = this.documents.editRevision(id)
       const plan = await this.queries.confirmSessions('close', [id])
       if (!plan || this.disposed || !this.documents.get(id)) return
-      if (this.documents.revision(id) !== approved) throw new Error('The query changed while confirming close. Review the latest changes before closing it.')
+      if (this.documents.editRevision(id) !== approved) throw new Error('The query changed while confirming close. Review the latest changes before closing it.')
       const { file, name } = this.documents.get(id)!
       const note = await this.documents.close(id, plan.get(id))
       if (note) this.queries.sessionNote?.(id, note, name)
@@ -378,7 +378,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       for (const document of this.documents.getSnapshot().documents) {
         if (!kept?.has(document.id) && !await this.confirmClose(document.id)) return
         if (this.disposed) return
-        if (this.documents.get(document.id)) approved.set(document.id, this.documents.revision(document.id))
+        if (this.documents.get(document.id)) approved.set(document.id, this.documents.editRevision(document.id))
       }
       // A kept single-server BigQuery tab's job keeps running and re-attaches at the next start (docs/bigquery.md, Quitting Varia leaves
       // jobs running): it is not asked about, and its session is not ended. Multi-target tabs are excluded so Quit always prompts to cancel them.
@@ -394,7 +394,7 @@ export class FileService extends SnapshotStore<FileSnapshot> implements Disposab
       if (this.disposed) return
       const unchanged = () => {
         const current = this.documents.getSnapshot().documents
-        if (current.length !== approved.size || current.some(document => approved.get(document.id) !== this.documents.revision(document.id)))
+        if (current.length !== approved.size || current.some(document => approved.get(document.id) !== this.documents.editRevision(document.id)))
           throw new Error('A query changed while closing the window. Review the latest changes before closing it.')
       }
       unchanged()

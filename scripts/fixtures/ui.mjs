@@ -157,6 +157,7 @@ export const part = {
   objectSearchTab: '[data-object-search]',
   /** The Search Objects tab's summary status line (distinct from SearchDetails' FactGrid copy live region). */
   objectSearchSummary: '.object-search-summary',
+  objectSearchIndex: '.object-search-index',
   explorerSearchField: '.object-search-pane .object-search-field',
   explorerSearchBar: '.object-search-pane .object-search-bar',
   explorerSearchFilters: '.object-search-pane .object-search-pane-filters',
@@ -281,6 +282,11 @@ export const part = {
   // The Schedules Timeline (src/renderer/src/agent/TimelineView.ts): a run's bar in a lane (hidden from assistive technology, as
   // the live region announces the active run), to click one where it is drawn.
   agentTimelineBar: '.agent-timeline-bar:not([hidden])',
+  // Job › Steps balanced 3-column step card flow row (src/renderer/src/agent/JobSteps.tsx).
+  stepFlow: '.agent-step-flow',
+  stepFlowType: '.agent-step-type',
+  stepFlowOk: '.agent-step-ok',
+  stepFlowBad: '.agent-step-bad',
   // Stand-ins: page code gives a probe element these classes to read what the stylesheet gives that surface (a menu's
   // entrance, a selected tree row, the current dialog page, an open menu-bar button) without opening one.
   menu: '.menu',
@@ -508,6 +514,8 @@ export const readOnlyStatus = page => editorStatus(page).getByText('Read-only', 
 export const memoryIndicator = page => statusBar(page).locator(part.memory)
 export const memoryBreakdown = page => page.getByRole('region', { name: 'Memory usage', includeHidden: true })
 export const memoryUsage = (page, feature) => page.locator(`.memory-details .memory-row[data-feature="${feature}"] .memory-usage`)
+/** The Search Indexer row's Saved on disk line: the saved index's files against its limit, and how it stands. */
+export const memorySaved = page => page.locator('.memory-details .memory-row[data-feature="index"] .memory-store')
 /** The active document's status: its state sentence and connection facts, or a value document's kind. */
 export const queryStatus = page => page.getByRole('status', { name: 'Query status', exact: true })
 /** One query status fact by key: server, login, database, time or rows. */
@@ -926,6 +934,10 @@ export const objectSearchHits = page => page.locator(part.objectSearchTab).getBy
 export const objectSearchSelected = page => page.locator(part.objectSearchTab).getByRole('listbox', { name: 'Results', exact: true }).getByRole('option', { selected: true })
 /** The Search Objects tab's own summary status line (`role="status"`). */
 export const objectSearchSummary = page => page.locator(part.objectSearchTab).locator(part.objectSearchSummary)
+/** The Search Objects tab's index lines: what the index holds, then (when its memory ran out) what to do about it. */
+export const objectSearchIndexLines = page => page.locator(part.objectSearchTab).locator(part.objectSearchIndex)
+/** Object Explorer's search band's index line, shown while a build runs or the index leaves something out. */
+export const explorerSearchIndexLine = page => page.locator(part.explorerSearch).locator(`:scope > .object-search-query > ${part.objectSearchIndex}`)
 export const explorerSearchSplitter = page => page.locator(part.explorerSearch).getByRole('separator', { name: 'Resize search results', exact: true })
 export const explorerSearchToggle = (page, name) => page.locator(part.explorerSearch).getByRole('button', { name, exact: true })
 export const explorerSearchOptions = page => page.locator(part.explorerSearch).getByRole('button', { name: /^Search options/ })
@@ -1095,6 +1107,20 @@ export const inspectorTabs = frame => frame.getByRole('tablist', { name: 'Object
 export const inspectorTab = (frame, name) => inspectorTabs(frame).getByRole('tab', { name: new RegExp(`^${escaped(name)}(?:\\s|\\(|$)`) })
 export const inspectorTabLabels = frame => inspectorTabs(frame).getByRole('tab').locator(part.inspectorTabLabel)
 export const inspectorPanel = frame => frame.getByRole('tabpanel')
+/** Measures balanced 3-column step card geometry (44px type badge + aligned ✓ and ✗ columns) in Chromium. */
+export const stepCardFlowGeometry = listbox => listbox.getByRole('option').evaluateAll((cards, selectors) => cards.map(card => {
+  const type = card.querySelector(selectors.type)?.getBoundingClientRect()
+  const ok = card.querySelector(selectors.ok)?.getBoundingClientRect()
+  const bad = card.querySelector(selectors.bad)?.getBoundingClientRect()
+  return {
+    typeText: card.querySelector(selectors.type)?.textContent?.trim() ?? '',
+    typeWidth: Math.round(type?.width ?? 0),
+    okX: Math.round(ok?.x ?? -1),
+    badX: Math.round(bad?.x ?? -1),
+    okHeight: Math.round(ok?.height ?? 0),
+    badHeight: Math.round(bad?.height ?? 0)
+  }
+}), { type: part.stepFlowType, ok: part.stepFlowOk, bad: part.stepFlowBad })
 /** A section's item in the list by the section's id (its name says when the section needs attention). */
 export const sectionItem = (frame, id) => sectionList(frame).locator(`[data-section="${id}"]`)
 export const currentSectionItem = frame => sectionList(frame).locator('[aria-current="location"]')
@@ -1180,3 +1206,18 @@ export const messagesFilterBar = page => page.getByRole('region', { name: 'Filte
 export const crossEngineBar = page => page.getByRole('toolbar', { name: 'Cross-Engine editor layout', exact: true })
 export const crossEnginePane = (page, dialect) => page.locator(`${part.crossEnginePane}[data-cross-dialect="${dialect}"]`)
 export const crossEngineGuardStrip = scope => scope.locator(part.crossEngineGuardStrip)
+
+// Job Activity Monitor (AP-3): slim KPI tiles, single grouped toolbar, and portal action menus.
+export const jamTile = (frame, name) => frame.getByRole('group', { name: 'Job counts', exact: true }).getByRole('button', { name: new RegExp(`^${escaped(name)}: `) })
+export const jamToolbar = frame => frame.getByRole('toolbar', { name: 'Job actions', exact: true })
+export const jamMenu = (page, name) => page.getByRole('menu', named(name))
+export async function chooseJamEnableAction(page, frame, name) {
+  const trigger = jamToolbar(frame).getByRole('button', { name: 'Enable / Disable', exact: true })
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await jamMenu(page, 'Enable / Disable').getByRole('menuitem', named(name)).click()
+}
+export async function chooseJamMoreAction(page, frame, name) {
+  const trigger = jamToolbar(frame).getByRole('button', { name: 'More actions', exact: true })
+  if (await trigger.getAttribute('aria-expanded') !== 'true') await trigger.click()
+  await jamMenu(page, 'More actions').getByRole('menuitem', named(name)).click()
+}

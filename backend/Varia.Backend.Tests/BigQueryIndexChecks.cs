@@ -37,10 +37,13 @@ internal static partial class BigQueryIndexChecks
         using var rsa = System.Security.Cryptography.RSA.Create(2048);
         var key = BigQueryCredentialChecks.Key(rsa.ExportPkcs8PrivateKeyPem());
         await BuildAsync(check, key);
+        await AdmissionAsync(check);
+        await LargeListingAsync(check, key);
         await RefreshAsync(check, key);
         await FailuresAsync(check, key);
         await DiscoveryAndNoiseAsync(check, key);
         await WavesAndBudgetAsync(check, key);
+        await SharesAsync(check);
         await BulkAsync(check, key);
         LookupStates(check);
         await LookupAsync(check, key);
@@ -240,9 +243,21 @@ internal static partial class BigQueryIndexChecks
         var bare = new BigQueryReader(limits, pool, null).Read("p", "d", entries, true, false)!;
         check(BigQueryEntries.Known(names, true).Count == 0 && BigQueryEntries.Known(bare, true).Count == 0 && BigQueryEntries.Known(bare, false).Count == 1,
             "a read that left columns out is never reused, nor one without definitions by a build that wants them");
-        var reserved = new ObjectIndexLimits { NamesReserveBytes = long.MaxValue / 4 };
-        var tight = new BigQueryReader(reserved, new StringPool(new IndexBudget(reserved.MemoryBytes)), null).Read("p", "d", entries, true, true)!;
-        check(tight.Cut == 1 && BigQueryEntries.Known(tight, true).Count == 0, "a view whose text the names' reserve left out is read again by the next build");
+        // The view's text changed, with no room above the details' floor: its columns fit in the share of the read it replaces,
+        // its new text does not, and is left out.
+        var tight = new BigQueryReader(limits, pool, next, detailsFloor: long.MaxValue / 4).Read("p", "d", [entries[0] with { Detail = view with { Definition = "SELECT 9 AS a, 2 AS b FROM t" } }], true, true)!;
+        check(tight is { Cut: 1, LeftOut: 1, ChildrenLeftOut: false } && read.LeftOut == 0 && BigQueryEntries.Known(tight, true).Count == 0,
+            "a view whose text the details' floor left out is counted as left out for memory (one cut at its length is not) and is read again by the next build");
+        // What was not whole is not reused, but pass 1 carries it until pass 2 reads the object again, still marked not whole:
+        // the dataset keeps the memory its columns hold between the passes, and a build stopped in between reuses nothing stale.
+        var carried = BigQueryEntries.Known(tight, true, carry: true);
+        var held2 = new BigQueryReader(limits, pool, tight).Read("p", "d", [entries[0] with { Detail = carried[("bqView", "v")].Detail }], true, true)!;
+        check(carried[("bqView", "v")].Detail is { TextLeftOut: true, Definition: null } && held2 is { Cut: 1, LeftOut: 1 } && BigQueryEntries.Known(held2, true, carry: true)[("bqView", "v")].Detail.TextLeftOut,
+            $"a view's text left out for memory is still counted while its details are carried ({held2.LeftOut} left out)");
+        check(carried[("bqView", "v")].Detail is { Carried: true, Columns.Count: 1 } && BigQueryEntries.Known(read, true, carry: true)[("bqView", "v")].Detail.Carried == false
+            && held2.Table.Count == tight.Table.Count && BigQueryEntries.Known(held2, true).Count == 0 && BigQueryEntries.Known(held2, true, carry: true).Count == 1
+            && BigQueryEntries.Known(bare, true, carry: true)[("bqView", "v")].Detail.Carried && BigQueryEntries.Known(names, true, carry: true).Count == 0,
+            "details that were not whole are carried through pass 1 with their columns, never reused; a read without columns carries nothing");
         var columns = Enumerable.Range(0, BigQueryReader.MaxTypes + 1).Select(at => new BigQueryColumn("c" + at, false, "STRING(" + at + ")", true, null)).ToList();
         List<BigQueryEntry> wide = [new("bqTable", "bqTables", null, "wide", 1, null, Detail: new BigQueryDetail(null, null, null, columns))];
         var budget = new StringPool(new IndexBudget(limits.MemoryBytes));
@@ -250,6 +265,60 @@ internal static partial class BigQueryIndexChecks
         var used = budget.Budget.Used;
         var kept = new BigQueryReader(limits, budget, null).Read("p", "d", wide, false, true);
         check(whole is null && used == 0 && kept is { ChildrenLeftOut: true }, $"more distinct column types than a read numbers is too large for columns, giving back what it took ({used})");
+    }
+
+    /// <summary>Pass 2 admits datasets by the objects they read: together within the permits, a larger one alone, first come first.</summary>
+    static async Task AdmissionAsync(Action<bool, string> check)
+    {
+        check(!ObjectSearchService.ProgressReplaces(false, "names", "names", 40, 41) && ObjectSearchService.ProgressReplaces(false, "names", "names", 41, 41)
+            && ObjectSearchService.ProgressReplaces(true, "names", "names", 40, 41) && ObjectSearchService.ProgressReplaces(false, "details", "names", 5, 41),
+            "a progress count (done or total) read out of order never goes back within a phase; a new phase or the phase's last report replaces it");
+        var admission = new BigQueryDetailAdmission(10);
+        using (var ended = new CancellationTokenSource())
+        {
+            ended.Cancel();
+            var refusedAtOnce = false;
+            try { (await admission.EnterAsync(1, ended.Token)).Dispose(); } catch (OperationCanceledException) { refusedAtOnce = true; }
+            check(refusedAtOnce && admission.Admitted == (0, 0), "a dataset already stopped is not admitted, even with room");
+        }
+        var six = await admission.EnterAsync(6, CancellationToken.None);
+        var second = admission.EnterAsync(6, CancellationToken.None);
+        var small = admission.EnterAsync(3, CancellationToken.None);
+        var waited = !second.IsCompleted && !small.IsCompleted && admission.Admitted == (6, 1);
+        six.Dispose();
+        six.Dispose();
+        var both = await Task.WhenAll(second, small).WaitAsync(TimeSpan.FromSeconds(30));
+        check(waited && admission.Admitted == (9, 2), $"datasets wait until their objects fit, in order, and a ticket is returned once: {admission.Admitted}");
+        var huge = admission.EnterAsync(50, CancellationToken.None);
+        using var stop = new CancellationTokenSource();
+        var behind = admission.EnterAsync(1, stop.Token);
+        var queued = !huge.IsCompleted && !behind.IsCompleted;
+        stop.Cancel();
+        var cancelled = false;
+        try { await behind; } catch (OperationCanceledException) { cancelled = true; }
+        foreach (var ticket in both) ticket.Dispose();
+        using (await huge.WaitAsync(TimeSpan.FromSeconds(30)))
+            check(queued && cancelled && admission.Admitted == (50, 1), $"a dataset larger than the permits reads alone once the others finish, and a cancelled wait leaves the queue: {admission.Admitted}");
+        check(admission.Admitted == (0, 0), "every admitted dataset leaves");
+    }
+
+    /// <summary>A listing past its first page holds one of the few large-listing slots while it reads on, and gives it back.</summary>
+    static async Task LargeListingAsync(Action<bool, string> check, JsonObject key)
+    {
+        using var harness = new Harness();
+        await harness.ConnectAsync(key);
+        var during = -1;
+        harness.Fake.On("GET", Sales + "/tables", request =>
+        {
+            if (!request.Uri.Query.Contains("pageToken=more", StringComparison.Ordinal))
+                return new(200, """{"tables":[{"tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"orders"},"type":"TABLE","creationTime":"1767225600000"}],"nextPageToken":"more"}""");
+            during = harness.Service.BigQuery.LargeListings.CurrentCount;
+            return new(200, """{"tables":[{"tableReference":{"projectId":"varia-alpha","datasetId":"sales","tableId":"customers"},"type":"TABLE","creationTime":"1767225600000"}]}""");
+        });
+        var built = await harness.Index();
+        check(during == BigQueryIndexLimits.LargeListings - 1 && harness.Service.BigQuery.LargeListings.CurrentCount == BigQueryIndexLimits.LargeListings
+            && built.Status is { State: "ready" },
+            $"a dataset's second listing page reads under a large-listing slot, returned after ({during}, {harness.Service.BigQuery.LargeListings.CurrentCount})");
     }
 
     static async Task BuildAsync(Action<bool, string> check, JsonObject key)
@@ -358,9 +427,12 @@ internal static partial class BigQueryIndexChecks
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["allProjects"] = false })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["maxProjects"] = 10 })).Code,
             (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["scope"] = new JsonObject { ["project"] = "varia-alpha" } })).Code,
-            (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["stale"] = true })).Code
+            (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["missingOnly"] = true })).Code
         };
-        check(sqlRefused.All(value => value == "INVALID_PARAMS"), "SQL Server refuses starredProjects, allProjects, maxProjects, scope and stale: " + string.Join(",", sqlRefused));
+        check(sqlRefused.All(value => value == "INVALID_PARAMS"), "SQL Server refuses starredProjects, allProjects, maxProjects, scope and missingOnly: " + string.Join(",", sqlRefused));
+        // A check (stale, docs/object-search.md, Freshness) is SQL Server's too: it passes validation and reaches the connection.
+        var sqlCheck = (await harness.Call("explorer.index", new JsonObject { ["connectionId"] = sqlId, ["requestId"] = Guid.NewGuid().ToString(), ["stale"] = true, ["database"] = "Sales" })).Code;
+        check(sqlCheck == "NOT_CONNECTED", "SQL Server takes stale, with a database to check: " + sqlCheck);
         var refreshed = await harness.Index(more => more["scope"] = new JsonObject { ["project"] = "varia-alpha", ["dataset"] = "sales" });
         var bare = await harness.Index(more => { more["stale"] = true; more["definitions"] = false; });
         check(refreshed.Status.NamesOnly is null && bare.Status.NamesOnly is null && bare.Status.Definitions,
@@ -552,6 +624,17 @@ internal static partial class BigQueryIndexChecks
         // Restore discovered projects before testing failed discovery retention.
         await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
 
+        // A discovered project VPC Service Controls blocks (off the network) is no noise: a skip that names the perimeter, and
+        // what an earlier build read of it stays searchable.
+        harness.Fake.On("GET", Base + "disc-ok/datasets", BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        var fenced = await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+        check(fenced.Status.Skipped.Any(skip => skip is { Project: "disc-ok", Database: "", Code: "PERMISSION_DENIED" } && skip.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal))
+            && (await harness.Search("metrics")).Hits.Any(hit => hit.Object is { Project: "disc-ok", Name: "metrics" }),
+            "a discovered project VPC Service Controls blocks is a skip naming the perimeter, and its earlier reads are kept: "
+            + string.Join(" | ", fenced.Status.Skipped.Select(skip => skip.Project + ":" + skip.Code + " " + skip.Message)));
+        harness.Fake.On("GET", Base + "disc-ok/datasets", new BigQueryFake.Reply(200, "{\"datasets\":[{\"datasetReference\":{\"projectId\":\"disc-ok\",\"datasetId\":\"analytics\"},\"location\":\"US\"}]}"));
+        await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+
         // Invalid connectionId on bigquery.connectionProjects and bigquery.indexEstimate returns INVALID_PARAMS, never BACKEND_ERROR.
         var (badProjConn, _, _) = await harness.Call("bigquery.connectionProjects", new JsonObject());
         var (badEstConn, _, _) = await harness.Call("bigquery.indexEstimate", new JsonObject());
@@ -566,6 +649,13 @@ internal static partial class BigQueryIndexChecks
             && (await harness.Search("population")).Hits.Count > 0
             && (await harness.Search("metrics")).Hits.Count > 0,
             "when projects.list fails, one discovery skip is recorded, billing + starred still build, and earlier discovered reads are not pruned");
+        check(failedDiscovery.Status.Skipped.Where(skip => skip.Project == "").All(skip => !skip.Message.Contains("bigquery.projects.list", StringComparison.Ordinal)),
+            "a refused projects.list names no permission, since none grants it: " + string.Join(" | ", failedDiscovery.Status.Skipped.Select(skip => skip.Message)));
+        harness.Fake.On("GET", BigQueryFake.Projects, BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        var perimeterDiscovery = await harness.Index(more => more["starredProjects"] = new JsonArray("varia-beta"));
+        check(perimeterDiscovery.Status.Skipped.Any(skip => skip is { Project: "", Database: "", Code: "PERMISSION_DENIED" } && skip.Message.StartsWith("VPC Service Controls blocked this request:", StringComparison.Ordinal)
+                && skip.Message.Contains("identifier Vpc-Fixture_01", StringComparison.Ordinal)),
+            "a projects.list VPC Service Controls refuses is a discovery skip that says so: " + string.Join(" | ", perimeterDiscovery.Status.Skipped.Select(skip => skip.Message)));
 
         // 500-project default cap (Cut): > 500 projects in one page, and 500 projects + nextPageToken.
         var fiveHundredOne = new JsonArray([.. Enumerable.Range(0, BigQueryIndexLimits.MaxProjects + 1).Select(index => (JsonNode)new JsonObject { ["id"] = $"cap-proj-{index:D4}" })]);
@@ -625,20 +715,31 @@ internal static partial class BigQueryIndexChecks
 
         // 2. Wave 2 budget early-stop: discovered project hits TOO_LARGE -> stops further Wave 2 calls, records one summary skip, keeps Wave 1 intact.
         {
-            var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c", "disc-d", "disc-e", "disc-f", "disc-g", "disc-h"], tablesPerDiscovered: 80, columnsPerTable: 0);
+            // More projects than the build lists at once (and than its consumers and channel hold), so an early stop has calls left to save.
+            var discoveredCount = BigQueryIndexLimits.Projects + BigQueryIndexLimits.Datasets * 6;
+            var source = new FakeBudgetSource(discoveredProjects: [.. Enumerable.Range(0, discoveredCount).Select(at => "disc-" + at.ToString("D3", System.Globalization.CultureInfo.InvariantCulture))], tablesPerDiscovered: 80, columnsPerTable: 0);
             using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
             var id = Guid.NewGuid().ToString();
             var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             var billingHeld = search.HeldOf(id).Any(read => read.Database == "varia-alpha" && read.Dataset == "sales");
             check(billingHeld
                 && result.Status.Skipped.Count(skip => skip is { Project: "", Database: "", Code: "TOO_LARGE" }) == 1
-                && source.DiscoveredObjectCalls < 8,
-                $"wave 2 budget early-stop halts further discovered listing calls ({source.DiscoveredObjectCalls}/8), records one summary TOO_LARGE skip, and keeps Wave 1 intact");
+                && source.DiscoveredObjectCalls < discoveredCount,
+                $"wave 2 budget early-stop halts further discovered listing calls ({source.DiscoveredObjectCalls}/{discoveredCount}), records one summary TOO_LARGE skip, and keeps Wave 1 intact");
         }
 
-        // 3. Wave 3 budget early-stop (via Hold returning CHILDREN_LEFT_OUT on a wide discovered table, and via NamesReserveBytes / 2 floor).
+        // 3. Wave 3 budget early-stop (via Hold returning CHILDREN_LEFT_OUT on a wide discovered table, and via the discovered projects' floor).
         {
-            var source = new FakeBudgetSource(discoveredProjects: ["disc-01", "disc-02", "disc-03", "disc-04", "disc-05", "disc-06", "disc-07", "disc-08"], tablesPerDiscovered: 1, columnsPerTable: 300);
+            // The first discovered detail read goes at once; the rest wait for the early stop to cancel them (the build reads many
+            // datasets at once, so without the wait they would all be in flight before the first one's dataset is held).
+            var first = 0;
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-01", "disc-02", "disc-03", "disc-04", "disc-05", "disc-06", "disc-07", "disc-08"], tablesPerDiscovered: 1, columnsPerTable: 300)
+            {
+                OnTableAsync = async (_, token) =>
+                {
+                    if (Interlocked.Exchange(ref first, 1) != 0) await Task.Delay(TimeSpan.FromSeconds(30), token);
+                }
+            };
             // Large enough for Wave 1 (billing) + Wave 2 (all 8 discovered project names), too small for wide discovered columns in Wave 3.
             using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 25_000, NamesReserveBytes = 0 });
             var id = Guid.NewGuid().ToString();
@@ -653,14 +754,15 @@ internal static partial class BigQueryIndexChecks
         }
         {
             var source = new FakeBudgetSource(discoveredProjects: ["disc-01", "disc-02", "disc-03"], tablesPerDiscovered: 1, columnsPerTable: 5);
-            // Reserve floor (NamesReserveBytes / 2) already exceeded after Wave 1 + Wave 2 -> Wave 3 issues 0 discovered detail calls!
-            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 200_000, NamesReserveBytes = 399_000 });
+            // Discovered projects' details floor (twice the names' reserve) is already passed after Wave 1 + Wave 2, while the names
+            // floor (one and a half times) is not -> Wave 3 issues 0 discovered detail calls!
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 200_000, NamesReserveBytes = 99_900 });
             var id = Guid.NewGuid().ToString();
             var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             check(source.DiscoveredDetailCalls == 0
                 && result.Status.NamesOnly is ["disc-01", "disc-02", "disc-03"]
                 && search.HeldOf(id).Count(read => read.Database.StartsWith("disc-", StringComparison.Ordinal)) == 3,
-                $"wave 3 reserve floor stops before issuing discovered detail calls ({source.DiscoveredDetailCalls}) and marks all 3 discovered projects NamesOnly while keeping Wave 2 names");
+                $"wave 3 discovered floor stops before issuing discovered detail calls ({source.DiscoveredDetailCalls}) and marks all 3 discovered projects NamesOnly while keeping Wave 2 names");
 
             // 4. Cancelled rebuild preserves prior NamesOnly instead of eagerly wiping it at build start.
             using var cancel = new CancellationTokenSource();
@@ -671,6 +773,11 @@ internal static partial class BigQueryIndexChecks
             var afterCancel = search.LookupBigQuery(id, "varia-alpha");
             check(cancelled && afterCancel.NamesOnly("disc-01") && afterCancel.NamesOnly("disc-02") && afterCancel.NamesOnly("disc-03"),
                 "cancelled full rebuild preserves prior NamesOnly list");
+            // explorer.indexStatus tells a window what the stopped build kept: still ready, marked stopped.
+            var stoppedStatus = search.IndexStatus(new ObjectIndexStatusArgs(id), bigQuery: true).Status;
+            var unknown = search.IndexStatus(new ObjectIndexStatusArgs(Guid.NewGuid().ToString()), bigQuery: true).Status;
+            check(stoppedStatus is { State: "ready", Stopped: true, Objects: > 0, Provider: Providers.BigQuery } && unknown is { State: "none", Stopped: null, Provider: Providers.BigQuery },
+                $"explorer.indexStatus reports a stopped full build's index as ready and stopped ({stoppedStatus.State}, {stoppedStatus.Stopped}, {stoppedStatus.Objects} objects), and an unindexed connection as none");
 
             // 5. Whole-project scoped refresh that hits a detail failure keeps the project in NamesOnly; a clean scoped refresh clears only that project.
             source.FailTableForProject = "disc-01";
@@ -682,6 +789,9 @@ internal static partial class BigQueryIndexChecks
             var cleanScope = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString(), Scope: new("disc-01")), source, CancellationToken.None);
             check(cleanScope.Status.NamesOnly is ["disc-02", "disc-03"],
                 "clean whole-project scoped refresh clears only that project from NamesOnly");
+            var rebuilt = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
+            check(cleanScope.Status.Stopped == true && rebuilt.Status.Stopped is null,
+                "a scoped refresh leaves a stopped build's mark; only a finished full build clears it");
         }
 
         // 6. Wave 2 budget early-stop racing with a sibling non-OCE API error still completes cleanly (does not crash with TIMEOUT).
@@ -803,13 +913,22 @@ internal static partial class BigQueryIndexChecks
 
         // 11. Mid-project Wave 2 memory early-stop reports ProjectState.Partial and Dataset.Skipped in BigQueryLookup.
         {
+            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var id = Guid.NewGuid().ToString();
             var source = new FakeBudgetSource(discoveredProjects: ["disc-mid"], tablesPerDiscovered: 40, columnsPerTable: 0)
             {
                 CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["disc-mid"] = ["ds1", "ds2", "ds3", "ds4", "ds5", "ds6"] },
-                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200, [("disc-mid", "ds4")] = 200, [("disc-mid", "ds5")] = 200, [("disc-mid", "ds6")] = 200 }
+                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200, [("disc-mid", "ds4")] = 200, [("disc-mid", "ds5")] = 200, [("disc-mid", "ds6")] = 200 },
+                // The large datasets finish listing only once ds1 is held: listings run at once, and one that took the budget
+                // first would stop the build before ds1, leaving the project with nothing held (no Partial to check).
+                OnDatasetObjectsAsync = async (project, dataset, token) =>
+                {
+                    if (project != "disc-mid" || dataset == "ds1") return;
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (!search.LookupBigQuery(id, "varia-alpha").Datasets("disc-mid").Contains("ds1") && DateTime.UtcNow < deadline)
+                        await Task.Delay(5, token);
+                }
             };
-            using var search = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
-            var id = Guid.NewGuid().ToString();
             var result = await search.IndexBigQueryAsync(new ObjectIndexArgs(id, Guid.NewGuid().ToString()), source, CancellationToken.None);
             var lookup = search.LookupBigQuery(id, "varia-alpha");
             var missing = new[] { "ds2", "ds3", "ds4", "ds5", "ds6" }.FirstOrDefault(ds => !lookup.Datasets("disc-mid").Contains(ds));
@@ -821,6 +940,7 @@ internal static partial class BigQueryIndexChecks
                 $"mid-project Wave 2 memory early-stop reports Partial project state ({lookup.ProjectState("disc-mid")}) and Skipped for unheld dataset {missing} ({missingInfo?.State})");
 
             // Promoting disc-mid to starred and cleanly refreshing it clears Partial even if AccessibleProjectsAsync fails.
+            source.OnDatasetObjectsAsync = null;
             source.CustomDatasets["disc-mid"] = ["ds1", "ds2"];
             source.TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 1 };
             source.FailDiscovery = true;
@@ -839,15 +959,24 @@ internal static partial class BigQueryIndexChecks
                 $"clean starred rebuild clears PartialProjects even when discovery fails ({promotedLookup.ProjectState("disc-mid")})");
 
             // Whole-project scoped refresh whose dataset listing succeeds clears PartialProjects even if a table hits a detail error.
+            using var scopedSearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
+            var scopedId = Guid.NewGuid().ToString();
             var scopedSource = new FakeBudgetSource(discoveredProjects: ["disc-mid"], tablesPerDiscovered: 40, columnsPerTable: 0)
             {
                 CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal) { ["disc-mid"] = ["ds1", "ds2", "ds3"] },
-                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200 }
+                TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 200, [("disc-mid", "ds3")] = 200 },
+                // Keep ds2/ds3 from tripping the 6 KB budget before ds1 is held, as in the check above.
+                OnDatasetObjectsAsync = async (project, dataset, token) =>
+                {
+                    if (project != "disc-mid" || dataset == "ds1") return;
+                    var deadline = DateTime.UtcNow.AddSeconds(30);
+                    while (!scopedSearch.LookupBigQuery(scopedId, "varia-alpha").Datasets("disc-mid").Contains("ds1") && DateTime.UtcNow < deadline)
+                        await Task.Delay(5, token);
+                }
             };
-            using var scopedSearch = new ObjectSearchService(new UnusedHost(), new ObjectIndexLimits { MemoryBytes = 6_000, NamesReserveBytes = 0 });
-            var scopedId = Guid.NewGuid().ToString();
             await scopedSearch.IndexBigQueryAsync(new ObjectIndexArgs(scopedId, Guid.NewGuid().ToString()), scopedSource, CancellationToken.None);
             var wasPartial = scopedSearch.LookupBigQuery(scopedId, "varia-alpha").ProjectState("disc-mid") == LookupState.Partial;
+            scopedSource.OnDatasetObjectsAsync = null;
             scopedSource.CustomDatasets["disc-mid"] = ["ds1", "ds2"];
             scopedSource.TablesPerDataset = new Dictionary<(string, string), int> { [("disc-mid", "ds1")] = 1, [("disc-mid", "ds2")] = 1 };
             scopedSource.FailTableForProject = "disc-mid";
@@ -856,7 +985,7 @@ internal static partial class BigQueryIndexChecks
             check(wasPartial
                 && afterScopedDetailErr.ProjectState("disc-mid") == LookupState.Ready
                 && afterScopedDetailErr.Dataset("disc-mid", "nonexistent_ds").State == LookupState.Absent,
-                $"whole-project scoped refresh clears PartialProjects even with detail errors ({afterScopedDetailErr.ProjectState("disc-mid")}/{afterScopedDetailErr.Dataset("disc-mid", "nonexistent_ds").State})");
+                $"whole-project scoped refresh clears PartialProjects even with detail errors (wasPartial={wasPartial}, {afterScopedDetailErr.ProjectState("disc-mid")}/{afterScopedDetailErr.Dataset("disc-mid", "nonexistent_ds").State})");
         }
 
         // 12. Wave 2 budget-stop does not conflate NOT_FOUND or PERMISSION_DENIED on earlier projects with budget cuts,
@@ -866,6 +995,9 @@ internal static partial class BigQueryIndexChecks
             var id = Guid.NewGuid().ToString();
             var dsGoneStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             var dsDeniedStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            // disc-c's huge datasets wait until its gone dataset has been given up, so the stop they cause cannot cut that off.
+            var dsGone2Done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            search.NamesHeld = (project, dataset) => { if (project == "disc-c" && dataset == "ds_gone2") dsGone2Done.TrySetResult(); };
             var source = new FakeBudgetSource(discoveredProjects: ["disc-a", "disc-b", "disc-c"], tablesPerDiscovered: 1, columnsPerTable: 0)
             {
                 CustomDatasets = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)
@@ -891,6 +1023,7 @@ internal static partial class BigQueryIndexChecks
                     if (project == "disc-a" && dataset == "ds_gone") dsGoneStarted.TrySetResult();
                     if (project == "disc-b" && dataset == "ds_denied") dsDeniedStarted.TrySetResult();
                     if (project == "disc-a" && dataset == "ds_ok") await dsGoneStarted.Task.WaitAsync(token);
+                    if (project == "disc-c" && dataset.StartsWith("ds_huge", StringComparison.Ordinal)) await dsGone2Done.Task.WaitAsync(TimeSpan.FromSeconds(60), token);
                 },
                 OnDatasetsAsync = async (project, token) =>
                 {
@@ -1161,17 +1294,61 @@ internal static partial class BigQueryIndexChecks
             });
             check(badProgress == 0, $"all streaming Wave 2 progress events satisfy Done <= Total (violations={badProgress})");
         }
+
+        // 21. A build whose calls BigQuery's rate limit stalls says so with no read finishing, and stops saying so after; the names
+        // total is marked as growing only while wave 2 is still listing projects, never in the details pass.
+        {
+            var throttled = 0;
+            var sawThrottled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            // After throttling ends, the stall goes on until the clearing event has been sent 1 + ThrottleRepeats times.
+            var clearing = 0;
+            var sawCleared = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var source = new FakeBudgetSource(discoveredProjects: ["disc-slow"], tablesPerDiscovered: 1, columnsPerTable: 0)
+            {
+                ThrottledNow = () => Volatile.Read(ref throttled) != 0,
+                OnDatasetObjectsAsync = async (project, _, token) =>
+                {
+                    if (project != "disc-slow") return;
+                    Volatile.Write(ref throttled, 1);
+                    await sawThrottled.Task.WaitAsync(TimeSpan.FromSeconds(60), token);
+                    Volatile.Write(ref clearing, 1);
+                    Volatile.Write(ref throttled, 0);
+                    await sawCleared.Task.WaitAsync(TimeSpan.FromSeconds(60), token);
+                }
+            };
+            using var search = new ObjectSearchService(new UnusedHost()) { ThrottleWatchEvery = TimeSpan.FromMilliseconds(20) };
+            var events = new List<JsonObject>();
+            var built = await search.IndexBigQueryAsync(new ObjectIndexArgs(Guid.NewGuid().ToString(), Guid.NewGuid().ToString()), source, CancellationToken.None, progress: evt =>
+            {
+                var json = JsonSerializer.SerializeToNode(evt, Wire)!.AsObject();
+                lock (events) events.Add(json);
+                if (json["throttled"]?.GetValue<bool>() == true) sawThrottled.TrySetResult();
+                else if (Volatile.Read(ref clearing) != 0 && Interlocked.Increment(ref clearing) > 1 + ObjectSearchService.ThrottleRepeats) sawCleared.TrySetResult();
+            });
+            bool Flag(JsonObject item, string name) => item[name]?.GetValue<bool>() == true;
+            string Phase(JsonObject item) => item["phase"]?.GetValue<string>() ?? "";
+            var names = events.Where(item => Phase(item) == "names").ToList();
+            check(sawThrottled.Task.IsCompletedSuccessfully && sawCleared.Task.IsCompletedSuccessfully && !Flag(events[^1], "throttled") && events.All(item => item["throttled"] is null || Flag(item, "throttled"))
+                && events.All(item => item["type"]?.GetValue<string>() == "explorer.index.progress"),
+                $"a stalled build reports throttling by itself and clears it once BigQuery stops refusing, sending the clearing event again in case it was dropped: {string.Join(" ", events.Select(item => item.ToJsonString()).TakeLast(4))}");
+            check(names.Any(item => Flag(item, "growing")) && !Flag(names[^1], "growing") && events.Where(item => Phase(item) != "names").All(item => item["growing"] is null),
+                "the names total is marked growing only while wave 2 lists projects: " + string.Join(" ", names.Select(item => item.ToJsonString())));
+            check(built.Status.State == "ready", "the throttled build still finishes");
+        }
     }
 
-    sealed class UnusedHost : IObjectSearchHost
+    internal sealed class UnusedHost : IObjectSearchHost
     {
         public Varia.Backend.Explorer.ServerProfile Profile(string connectionId) => throw new NotSupportedException();
         public Microsoft.Data.SqlClient.SqlConnection Connection(string connectionId, string? database) => throw new NotSupportedException();
         public Task OpenAsync(Microsoft.Data.SqlClient.SqlConnection connection, CancellationToken token) => throw new NotSupportedException();
     }
 
-    sealed class FakeBudgetSource(IReadOnlyList<string> discoveredProjects, int tablesPerDiscovered, int columnsPerTable) : IBigQueryIndexSource
+    internal sealed class FakeBudgetSource(IReadOnlyList<string> discoveredProjects, int tablesPerDiscovered, int columnsPerTable) : IBigQueryIndexSource
     {
+        /// <summary>The connection's verified principal, whose saved index its datasets are; none by default, so nothing is saved.</summary>
+        public string? PrincipalId { get; set; }
+        public string? Principal(string connectionId) => PrincipalId;
         private int discoveredDatasetCalls, discoveredObjectCalls, discoveredDetailCalls;
         public int DiscoveredDatasetCalls => Volatile.Read(ref discoveredDatasetCalls);
         public int DiscoveredObjectCalls => Volatile.Read(ref discoveredObjectCalls);
@@ -1191,6 +1368,20 @@ internal static partial class BigQueryIndexChecks
         public Action<string>? AfterDatasetsAsync { get; set; }
         public Func<string, CancellationToken, Task>? OnObjectsAsync { get; set; }
         public Func<string, string, CancellationToken, Task>? OnDatasetObjectsAsync { get; set; }
+        public Func<bool>? ThrottledNow { get; set; }
+        /// <summary>Runs before a discovered project's tables.get is counted.</summary>
+        public Func<string, CancellationToken, Task>? OnTableAsync { get; set; }
+        /// <summary>A project's tables' creation time, when not the default: a table created again.</summary>
+        public Func<string, long?>? CreatedOf { get; set; }
+        /// <summary>One table's creation time or column count, when not its project's.</summary>
+        public Func<string, string, long?>? CreatedOfTable { get; set; }
+        public Func<string, string, int?>? ColumnsOfTable { get; set; }
+        /// <summary>A table's column names' prefix, when not its project's (so projects can share column texts in the pool, or a
+        /// table's columns can be renamed).</summary>
+        public Func<string, string, string?>? ColumnPrefix { get; set; }
+        /// <summary>Datasets that hold one date-sharded group instead: events_20261101 to the day given, each shard created on its day.</summary>
+        public Dictionary<(string Project, string Dataset), int>? ShardDays { get; set; }
+        public bool Throttled(string connectionId) => ThrottledNow?.Invoke() ?? false;
 
         public string BillingProject(string connectionId) => "varia-alpha";
         public Task<BigQueryProjectDiscovery> AccessibleProjectsAsync(string connectionId, int maxProjects, CancellationToken token)
@@ -1238,25 +1429,32 @@ internal static partial class BigQueryIndexChecks
             var count = TablesPerDataset is not null && TablesPerDataset.TryGetValue((project, dataset), out var customCount)
                 ? customCount
                 : project == "varia-alpha" ? 1 : tablesPerDiscovered;
-            var tables = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
-            {
-                TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },
-                Type = "TABLE", CreationTime = 1700000000000
-            }).ToList();
+            var tables = ShardDays is not null && ShardDays.TryGetValue((project, dataset), out var days)
+                ? Enumerable.Range(1, days).Select(day => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
+                {
+                    TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = "events_202611" + day.ToString("D2", System.Globalization.CultureInfo.InvariantCulture) },
+                    Type = "TABLE", CreationTime = 1700000000000 + day
+                }).ToList()
+                : Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableList.TablesData
+                {
+                    TableReference = new() { ProjectId = project, DatasetId = dataset, TableId = project + "_tbl_" + index },
+                    Type = "TABLE", CreationTime = CreatedOfTable?.Invoke(project, project + "_tbl_" + index) ?? CreatedOf?.Invoke(project) ?? 1700000000000
+                }).ToList();
             return new BigQueryListing(tables, [], [], false);
         }
         public async Task<Google.Apis.Bigquery.v2.Data.Table> TableAsync(string connectionId, string project, string dataset, string table, CancellationToken token)
         {
             if (project == FailTableForProject) throw new RequestException("TIMEOUT", "Simulated detail timeout.");
+            if (project != "varia-alpha" && OnTableAsync is not null) await OnTableAsync(project, token);
             if (project != "varia-alpha")
             {
                 Interlocked.Increment(ref discoveredDetailCalls);
                 await Task.Yield();
             }
-            var count = project == "varia-alpha" ? 2 : ColumnsPerTable;
+            var count = ColumnsOfTable?.Invoke(project, table) ?? (project == "varia-alpha" ? 2 : ColumnsPerTable);
             var fields = Enumerable.Range(0, count).Select(index => new Google.Apis.Bigquery.v2.Data.TableFieldSchema
             {
-                Name = "col_" + project + "_" + index, Type = "STRING", Mode = "NULLABLE"
+                Name = (ColumnPrefix?.Invoke(project, table) ?? "col_" + project + "_") + index, Type = "STRING", Mode = "NULLABLE"
             }).ToList();
             return new Google.Apis.Bigquery.v2.Data.Table { Type = "TABLE", Schema = new() { Fields = fields } };
         }
@@ -1264,6 +1462,6 @@ internal static partial class BigQueryIndexChecks
             throw new NotSupportedException();
         public IAsyncEnumerable<BigQueryBulkDataset> BulkAsync(string connectionId, string project, string location, bool definitions, long? cap, BigQueryBulkBudget budget,
             Func<string, string, bool> wanted, CancellationToken token) => throw new NotSupportedException();
-        public Exception Map(Exception error, string project, string permission, CancellationToken token) => error;
+        public Exception Map(Exception error, string project, string? permission, CancellationToken token) => error;
     }
 }

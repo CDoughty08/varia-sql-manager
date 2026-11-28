@@ -648,6 +648,47 @@ internal static partial class BigQueryExecutionChecks
             Error = new Google.Apis.Requests.RequestError { Code = 403, Message = "Response too large to return.", Errors = [new() { Reason = "responseTooLarge", Message = "Response too large to return." }] }
         }, "varia-alpha");
         check(api is RequestException { Code: "RESULT_TOO_LARGE" }, $"a call refused for a job's reason (403 responseTooLarge) maps as the job's would, not as a permission: {(api as RequestException)?.Code}");
+
+        // VPC Service Controls: the same accessDenied as a missing role, told apart by its message or its ErrorInfo detail.
+        var perimeterJob = Job("accessDenied", "VPC Service Controls: Request is prohibited by organization's policy. vpcServiceControlsUniqueIdentifier: Job-Id_42");
+        check(perimeterJob.Code == "PERMISSION_DENIED" && perimeterJob.Message.StartsWith("VPC Service Controls blocked this request:", StringComparison.Ordinal)
+            && perimeterJob.Message.Contains("identifier Job-Id_42", StringComparison.Ordinal),
+            $"a job VPC Service Controls refused says so with its identifier: {perimeterJob.Message}");
+        Exception Refusal(string message, string raw, string? permission, bool quote = true) => BigQueryErrors.Map(new Google.GoogleApiException("bigquery", message)
+        {
+            HttpStatusCode = System.Net.HttpStatusCode.Forbidden,
+            Error = new Google.Apis.Requests.RequestError { Code = 403, Message = message, Errors = [new() { Reason = "accessDenied", Message = message }], ErrorResponseContent = raw }
+        }, "varia-alpha", permission, quote: quote);
+        var detailOnly = Refusal("Request is prohibited by organization's policy.",
+            """{"error":{"code":403,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"SECURITY_POLICY_VIOLATED","domain":"googleapis.com","metadata":{"uniqueIdentifier":"Detail-Id_7"}}]}}""", "bigquery.jobs.create") as RequestException;
+        check(detailOnly is { Code: "PERMISSION_DENIED" } && detailOnly.Message.StartsWith("VPC Service Controls blocked", StringComparison.Ordinal)
+            && detailOnly.Message.Contains("identifier Detail-Id_7", StringComparison.Ordinal) && !detailOnly.Message.Contains("bigquery.jobs.create", StringComparison.Ordinal),
+            $"a refusal whose only VPC sign is its SECURITY_POLICY_VIOLATED detail is not reported as a missing permission: {detailOnly?.Message}");
+        var narrower = Refusal("Access Denied: Table varia-alpha:sales.orders: restricted by an IAM deny policy.", "{}", "bigquery.tables.get") as RequestException;
+        var unquoted = Refusal("Access Denied: Table varia-alpha:sales.orders: restricted by an IAM deny policy.", "{}", "bigquery.tables.get", quote: false) as RequestException;
+        check(narrower is { Code: "PERMISSION_DENIED" } && narrower.Message.Contains("bigquery.tables.get", StringComparison.Ordinal) && narrower.Message.Contains("Google says: Access Denied", StringComparison.Ordinal)
+            && !narrower.Message.Contains("Job User", StringComparison.Ordinal) && unquoted is { Code: "PERMISSION_DENIED" } && !unquoted.Message.Contains("orders", StringComparison.Ordinal),
+            $"a permission refusal keeps Google's text beside the permission (left out when asked), and names Job User only for jobs.create: {narrower?.Message} | {unquoted?.Message}");
+        // Only the forms no object name can make mark VPC Service Controls; an identifier longer than shown is left out, not cut.
+        var namedTable = Refusal("Access Denied: Table varia-alpha:ds.vpcServiceControlsUniqueIdentifier: User does not have permission to query table varia-alpha:ds.SECURITY_POLICY_VIOLATED.", "{\"error\":{\"message\":\"Access Denied: Table varia-alpha:ds.SECURITY_POLICY_VIOLATED\"}}", "bigquery.tables.get") as RequestException;
+        var longId = Refusal("VPC Service Controls: Request is prohibited by organization's policy. vpcServiceControlsUniqueIdentifier: " + new string('a', 129), "{}", null) as RequestException;
+        var longGoogle = Refusal("Access Denied: " + new string('x', 3000), "{}", "bigquery.tables.get") as RequestException;
+        check(namedTable is { Code: "PERMISSION_DENIED" } && !namedTable.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal)
+            && longId is { Code: "PERMISSION_DENIED" } && longId.Message.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal) && !longId.Message.Contains("identifier", StringComparison.Ordinal)
+            && longGoogle is { Code: "PERMISSION_DENIED" } && longGoogle.Message.Length <= 2000,
+            $"names spelling the VPC markers are no perimeter, an over-long identifier is left out, and a message stays at 2,000 characters: {namedTable?.Message} | {longId?.Message} | {longGoogle?.Message.Length}");
+        var unnamed = BigQueryErrors.Map(new Google.GoogleApiException("bigquery", "denied")
+        {
+            HttpStatusCode = System.Net.HttpStatusCode.Forbidden,
+            Error = new Google.Apis.Requests.RequestError { Code = 403, Message = "Access Denied", Errors = [new() { Reason = "accessDenied", Message = "Access Denied" }] }
+        }, "") as RequestException;
+        check(unnamed is { Code: "PERMISSION_DENIED" } && !unnamed.Message.Contains("project ", StringComparison.Ordinal),
+            $"an empty project names none: {unnamed?.Message}");
+        var violation = Refusal("Request is denied.", """{"error":{"code":403,"details":[{"@type":"type.googleapis.com/google.rpc.PreconditionFailure","violations":[{"type":"VPC_SERVICE_CONTROLS","description":"Viol-Id_9"}]}]}}""", "bigquery.jobs.create");
+        var explorerPerimeter = BigQueryService.ErrorOf(BigQueryErrors.Perimeter("Id_1"));
+        var explorerDenied = BigQueryService.ErrorOf(new RequestException("PERMISSION_DENIED", "The account lacks the bigquery.tables.list permission."));
+        check(BigQueryErrors.IsPerimeter(violation) && (violation as RequestException)!.Message.Contains("identifier Viol-Id_9", StringComparison.Ordinal) && explorerPerimeter is { Code: "PERMISSION_DENIED", Retryable: true } && explorerDenied is { Retryable: false },
+            $"a PreconditionFailure VPC_SERVICE_CONTROLS violation is a perimeter refusal, and an Explorer node it refused keeps Retry: {(violation as RequestException)?.Message} {explorerPerimeter} {explorerDenied}");
     }
 
     static async Task InsertAsync(Action<bool, string> check)
@@ -691,6 +732,16 @@ internal static partial class BigQueryExecutionChecks
             && Says(result, "BigQuery job varia-emulator:US.") && result.Database == "other_set" && body["configuration"]?["query"]?["defaultDataset"]?["datasetId"]?.GetValue<string>() == "other_set"
             && body["configuration"]?["jobTimeoutMs"] is null && HttpUtility.ParseQueryString(jobs.Reads.Last().Query)["location"] == "US",
             $"a finished job's bytes, slot time and cache hit are in Messages, priced, and in the summary; a request's dataset replaces the connection's: {code} {message} {Texts(result?.Messages ?? [])}");
+
+        // Explicit noDefaultDataset suppresses the connection's default dataset rather than falling back to it.
+        (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["noDefaultDataset"] = true);
+        body = jobs.InsertBodies.Last();
+        check(code == "ok" && result?.Database == "" && body["configuration"]?["query"]?["defaultDataset"] is null,
+            $"noDefaultDataset: true sends no defaultDataset even when the connection sets one: {code} {message} {body}");
+        var (bothCode, _, _) = await harness.Execute("SELECT * FROM t", args => { args["dataset"] = "other_set"; args["noDefaultDataset"] = true; });
+        check(bothCode == "INVALID_PARAMS", $"combining dataset and noDefaultDataset is refused: {bothCode}");
+        var (previewBothCode, _, _) = await harness.Execute("", args => { args["dataset"] = "other_set"; args["noDefaultDataset"] = true; args["preview"] = new JsonObject { ["project"] = "varia-emulator", ["dataset"] = "other_set", ["table"] = "t" }; });
+        check(previewBothCode == "INVALID_PARAMS", $"preview refuses combining dataset and noDefaultDataset: {previewBothCode}");
 
         // Show cost as Bytes only: the same figures without dollars.
         (code, result, message) = await harness.Execute("SELECT * FROM t", args => args["prices"] = false);

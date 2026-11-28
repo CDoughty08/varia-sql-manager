@@ -8,6 +8,8 @@ import { BackendSupervisor } from './backend/supervisor'
 import { BackendError, sentences } from './backend/errors'
 import { backendSpawnSpec, resultMemoryEnvironment } from './backend/spawn-spec'
 import { ResultMemoryLimit } from './backend/result-memory'
+import { IndexStoreConfig, indexStoreFolder, indexStoreSettingKeys, indexStoreSettings } from './backend/index-store'
+import { SearchIndexKeyStore, searchIndexKeyFile } from './search-index-key'
 import { rendererUrlVerifier } from './trusted-renderer'
 import { appIndexUrl, appProtocolHandler, appScheme, appSchemePrivileges } from './app-protocol'
 import { installTestHooks, type BackendTestHooks, type RendererLossSource } from './backend/test-hooks'
@@ -23,7 +25,7 @@ import { ActivityRequests } from './backend/activity-requests'
 import { cancellableRequests, connectionRequestLimits, RendererRequests } from './backend/renderer-requests'
 import { dialogQueue } from './dialog-queue'
 import { saveDefaultPath } from './file-names'
-import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, validateRequest, validateResult } from './validation'
+import { connectionAcceptSchema, connectionCancelSchema, connectionPruneSchema, indexStoreClearedSchema, secretStorageStateSchema, validateRequest, validateResult } from './validation'
 import { SqlFileStore, fileKinds, reloadPromptSchema, saveDocument, saveFileSchema, type TargetCache } from './sql-files'
 import { isKeptAgentKind } from '../shared/agent/kept'
 import { openRecentEntry, RecentFilesStore, systemRecentDocuments } from './recent-files-store'
@@ -336,6 +338,7 @@ const connectionSession = new ConnectionSessionCheckpoint(connectionAuthenticati
 }, async workspace => workspaceSealer?.seal(workspace))
 // Seals the session's silent connection targets with the OS key once the app is ready (connection-workspace-seal.ts).
 let workspaceSealer: ConnectionWorkspaceSealer | undefined
+let indexStore: IndexStoreConfig | undefined
 // Whether a page of this process has taken the session: only the first also reopens what a crashed run restored.
 let sessionTaken = false
 // Smoke suites keep the quit prompts they check unless they ask for hot exit (VARIA_TEST_HOT_EXIT=1).
@@ -1057,6 +1060,7 @@ app.whenReady().then(async () => {
   settings.onDidChange(state => {
     updater?.settingsChanged()
     memoryLimit.settingsChanged()
+    indexStore?.settingsChanged()
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('varia:settings-changed', state)
     buildMenu()
     // Items shown in recently used file lists may have changed.
@@ -1098,8 +1102,24 @@ app.whenReady().then(async () => {
   bigQueryStore = new BigQueryConnectionStore(join(app.getPath('userData'), profileFiles.bigQueryConnections.current), bigQueryKeyFiles)
   const history = connectionHistory(connectionStore, bigQueryStore)
   // Remember password: OS-protected ciphertext beside the connections file, read and decrypted only here (saved-passwords.ts).
-  const secretCipher = smokeProfile ? lockedCipher() : testSeams && process.env.VARIA_TEST_SAFE_STORAGE === 'test' ? testCipher() : safeStorageCipher(safeStorage, process.platform)
+  // Smoke runs choose a reversible test cipher (test) or a system without a key store (none); every other build uses the operating system's.
+  const testStorage = testSeams ? process.env.VARIA_TEST_SAFE_STORAGE : undefined
+  const secretCipher = smokeProfile ? lockedCipher() : testStorage === 'test' ? testCipher() : testStorage === 'none' ? lockedCipher('no-keyring') : safeStorageCipher(safeStorage, process.platform)
   const savedPasswords = new SavedPasswordStore(join(app.getPath('userData'), profileFiles.savedPasswords.current), secretCipher)
+  // The saved Search Objects index: its key is OS-protected ciphertext in a file of its own, read only here, and each
+  // backend is told the key, the folder and the limit in memory (IndexStoreConfig). No renderer sees any of the three.
+  let indexSettingsRead = false
+  const searchIndexKeys = new SearchIndexKeyStore(join(app.getPath('userData'), searchIndexKeyFile), secretCipher)
+  indexStore = new IndexStoreConfig({
+    request: (params, generation) => backend.request('explorer.indexStore.configure', params, { generation }),
+    onState: listener => backend.onState(listener), state: () => backend.state,
+    settings: () => indexSettingsRead && !indexStoreSettingKeys.some(key => settings.wasReset(key)) ? indexStoreSettings(settings.current()) : undefined,
+    folder: indexStoreFolder(app.getPath('userData')), keys: searchIndexKeys
+  })
+  // Nothing is configured until the settings are read: the first read fires no change, so the store is configured then.
+  const indexSettingsLoaded = (): void => { indexSettingsRead = true; indexStore?.settingsChanged() }
+  settings.onDidLoad(indexSettingsLoaded)
+  void settings.load().then(indexSettingsLoaded, () => {})
   // A smoke profile disables secret storage on purpose, as a keyring-less desktop does.
   workspaceSealer = new ConnectionWorkspaceSealer(secretCipher, { trustUnsealed: !!smokeProfile })
   credentialRequestsPending = () => hasPendingCredentialRequests(savedPasswords) || !!connectionOpen?.mutationPending
@@ -1536,6 +1556,9 @@ app.whenReady().then(async () => {
     confirm: async () => (await pageDialog((window, signal) => dialog.showMessageBox(window, { ...clearEntraPrompt, buttons: [...clearEntraPrompt.buttons], signal }), { response: 1, checkboxChecked: false }, true)).response === 0,
     clear: () => backend.request('entra.cache.clear', {})
   }))
+  // The page learns only the counts and whether a key store exists: never the key, its ciphertext or the folder.
+  handle('varia:index-store-clear', async () => indexStoreClearedSchema.parse(await backend.request('explorer.indexStore.clear', {})))
+  handle('varia:index-store-storage', async () => secretStorageStateSchema.parse(await searchIndexKeys.storage()))
   handle('varia:files-open', async () => {
     const selected = await pageDialog(window => dialog.showOpenDialog(window, { title: 'Open SQL query', filters: [{ name: 'SQL files', extensions: ['sql'] }, ...fileKinds.sqlplan.filters, { name: 'Text files', extensions: ['txt'] }], properties: ['openFile', 'multiSelections'] }), { canceled: true, filePaths: [] })
     if (selected.canceled) return { files: [], errors: [] }

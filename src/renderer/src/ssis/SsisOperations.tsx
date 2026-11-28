@@ -422,7 +422,7 @@ function RunPage({ documentId, state, place }: { readonly documentId: string; re
   const notRun = rows.filter(row => row.left === undefined && row.depth > 0).map(row => row.name)
   const failedRun = overview.status === 4 || overview.status === 6
   const counts = typeCounts(model), total = totalMessages(model), problems = problemCount(model)
-  const pinned = firstError(model.messages)
+  const pinned = model.firstError ?? (!model.truncated && !place.types && !place.source ? firstError(model.messages) : undefined)
   const shown = model.messages.length
   const details = place.view === 'details'
   const errorsOnly = place.types?.length === 1 && place.types[0] === 120

@@ -12,6 +12,11 @@ export const bigQuerySettings = [
     description: 'After a pause in typing, a free BigQuery dry run marks the query\'s error at its line and column and updates the estimate beside Execute. A dry run sends the query text to Google, as Execute does; it runs nothing and bills nothing. Off, Execute still dry-runs the query for its estimate.'
   },
   {
+    key: 'textEditor.googleSql.jitHydrate', page: 'textEditor.googleSql.general', label: 'Fetch schemas on demand for tables without indexed columns', type: 'boolean', default: true, varia: true,
+    keywords: ['bigquery', 'intellisense', 'autocomplete', 'columns', 'hydrate', 'schema', 'tables.get', 'names only'],
+    description: 'When a query references a table or routine in an indexed project whose columns have not been read yet (still in Wave 3 or stopped at the RAM cap), IntelliSense fetches just that object\'s schema with a free tables.get or routines.get metadata call and caches it in memory. Nothing runs or bills in BigQuery. Unstarred external projects are never fetched automatically; they offer one-click Fetch schema (free) and Star project actions.'
+  },
+  {
     key: 'textEditor.googleSql.bulkIndex', page: 'textEditor.googleSql.general', label: 'Read the search index’s details with billed INFORMATION_SCHEMA queries', type: 'boolean', default: false, varia: true,
     keywords: ['bigquery', 'index', 'search objects', 'information_schema', 'bulk', 'metadata', 'columns', 'cost'],
     description: 'A full build of a BigQuery connection\'s Search Objects index reads columns, view text and routine bodies with three region-scoped INFORMATION_SCHEMA queries per location instead of one free call per object, which is faster for large projects. BigQuery bills each query at least 10 MiB per view it reads, never from cache, so every build first makes a free estimate and goes through the cost prompts as Execute does: it asks when the estimate is above the threshold or may be low, and the build\'s queries together never bill more than the estimate. Off, the index reads only free metadata calls.'

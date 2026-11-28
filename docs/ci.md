@@ -74,6 +74,21 @@ the Measurements below with the new baseline.
   smoke reports its phase, bounds application, window and CDP cleanup, and has a ten-minute runner-level timeout outside
   its five-minute body watchdog (which catches synchronous work before the watchdog starts).
 
+## Packaging locally
+
+`npm run build` makes only the development backend; an installer needs the self-contained backend published for its
+target into `artifacts/release-backend`, as `package.yml` does. Package one target per run (each publishes to the same
+folder), from PowerShell or cmd on Windows so `tar` is Windows's BSD tar:
+
+```sh
+node scripts/package-prepare.mjs --rid osx-arm64     # osx-x64, linux-x64, or win-x64 --updater
+npx electron-builder --mac --arm64 --publish never   # --mac --x64, --linux, or --win --x64
+```
+
+`beforePack` (`build/backend-check.cjs`, `build/updater-check.cjs`) refuses a missing publish, one for another target or
+.NET version, or one that is not self-contained, since electron-builder only warns about a missing folder and the app
+would fail at launch with "Could not start the SQL backend" (spawn ENOENT).
+
 ## Documentation-only changes
 
 - `scripts/ci-scope.mjs` sends a PR whose changes are limited to `README.md`, `CHANGELOG.md`, `AGENTS.md`, `CLAUDE.md`

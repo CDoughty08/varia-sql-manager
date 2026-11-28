@@ -160,6 +160,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   // A build reads every database (each within its own 120 s budget) and only Stop (varia:explorer-cancel), a newer build or a
   // disconnect ends it; a search answers its own 5 s budget as a partial value.
   'explorer.index': { kind: 'unary', lane: 'explorer', deadlineMs: 0, ...both },
+  // Reads the index's counters only: what a stopped build kept, since its CANCELLED answer carries no status.
+  'explorer.indexStatus': { kind: 'unary', lane: 'explorer', deadlineMs: 5_000, ...both },
   'explorer.search': { kind: 'unary', lane: 'explorer', deadlineMs: 15_000, ...both },
   // The backend answers its own 15 s budget (peekLimits.budgetMs) as a TIMEOUT value, inside this deadline.
   'explorer.peek': { kind: 'unary', lane: 'explorer', deadlineMs: 30_000 },
@@ -207,10 +209,16 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
   'agent.counterValues': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'agent.errorLogs': { kind: 'unary', lane: 'metadata', deadlineMs: 45_000 },
   'language.parse': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000 },
-  // In-memory reads of the index: completion asks as the user types, so a lookup never waits long.
-  'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, providers: ['bigquery'] },
+  // In-memory reads of the Search Objects index (both BigQuery and SQL Server): completion, hover and lazy preview drawers never wait long.
+  'language.lookup': { kind: 'unary', lane: 'metadata', deadlineMs: 10_000, ...both },
+  // Free on-demand REST tables.get / routines.get hydration into the in-memory index, rate-limited per principal.
+  'language.hydrate': { kind: 'unary', lane: 'metadata', deadlineMs: 15_000, providers: ['bigquery'] },
   // Help › Clear Entra ID Token Cache: empties memory only, at once.
   'entra.cache.clear': control,
+  // The saved index's folder, key and limit, from main as each backend becomes ready: it checks them and queues a sweep.
+  'explorer.indexStore.configure': { ...control, ...both, sensitive: true },
+  // Clear Saved Search Indexes: deletes the store's files, a few thousand at most, off the frame loop.
+  'explorer.indexStore.clear': { ...control, ...both, deadlineMs: 60_000 },
   // No deadline and no backstop: only CANCEL, a disconnect, a loss or the source ending ends it.
   // Both engines: each source names its own (src/shared/live/catalog.ts), which main (optionsAllow) and the backend check.
   'live.subscribe': { kind: 'stream', lane: 'live', deadlineMs: 0, creditedEvents: true, ...both },
@@ -220,7 +228,8 @@ export const methodPolicies: { readonly [M in BackendMethod]: MethodPolicy<M> } 
 }
 
 /** Methods only main sends, on its own behalf: no renderer schema (requestSchemas) or port schema accepts them. */
-export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize', 'bigquery.endIdleSessions', 'bigquery.cancelJobs'] as const satisfies readonly BackendMethod[]
+export const mainOnlyMethods = ['results.copy', 'results.export', 'entra.cache.clear', 'results.setMemoryLimit', 'debug.results.synthesize', 'bigquery.endIdleSessions', 'bigquery.cancelJobs',
+  'explorer.indexStore.configure', 'explorer.indexStore.clear'] as const satisfies readonly BackendMethod[]
 
 /** Every method main may call; a backend whose HELLO lacks one of them is from a different build. `debug.*` methods
  *  exist only in a backend started with test hooks, so HELLO need not list them. */
@@ -280,7 +289,7 @@ export function optionsAllow(method: BackendMethod, provider: ProviderId | undef
   if (method !== 'query.execute') return true
   const options = params as Partial<BackendMethods['query.execute']['params']>
   if (provider === 'bigquery') return !options.stopOnError && !options.includeActualPlan && !options.includeLivePlan && !options.includeClientStatistics
-  return options.dataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined && options.residence === undefined && options.windowCacheMiB === undefined
+  return options.dataset === undefined && options.noDefaultDataset === undefined && options.maximumBytesBilled === undefined && options.prices === undefined && options.preview === undefined && options.residence === undefined && options.windowCacheMiB === undefined
 }
 
 /** The header deadline and main's backstop for one request, in ms (0 = none). */

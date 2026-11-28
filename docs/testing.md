@@ -171,7 +171,9 @@ npm run test:smoke:wsl -- --all
 - **Scratch.** `VARIA_TEST_SQL_SCRATCH=1` (set by CI and the session hook) adds the Object Explorer, Script As and object
   action scratch-database checks (actions in their own `VariaScratch_…_act`), the script goldens in
   `tests/fixtures/scripting/`, and lets live vitest files create and drop a uniquely named, marked `varia_scratch_…`
-  database (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those are skipped.
+  database (`tests/explorer-live.test.ts`, for graph and temporal tables); without it those are skipped. With it, `VARIA_TEST_SEARCH_RELOAD_ONLY=1` makes
+  `--live-suite Explorer` run only the Search Objects reload and freshness checks (`SearchReloadLiveChecks`,
+  `SearchFreshnessLiveChecks`), on their own scratch databases.
 - **Rewriting fixtures.** `VARIA_UPDATE_SCRIPT_GOLDENS=1` rewrites the goldens whose manifest source is `varia`;
   `VARIA_UPDATE_ORDINAL_CASING=1` (offline) rewrites `src/shared/ordinal-casing.ts` from the runtime's casing.
 - **Shared servers.** Run live suites one at a time where you can. Runs sharing a server tolerate each other's scratch
@@ -221,7 +223,8 @@ npm run test:smoke:wsl -- --all
 - **Smoke hooks.** Smoke tests set `VARIA_SMOKE_TEST=1` with an isolated user-data directory (`VARIA_TEST_USER_DATA`) and write screenshots to
   `artifacts/`. Every `electron.launch` passes `chromiumSandbox` so Linux keeps Chromium's sandbox (only root, as in cloud
   sessions, runs without it). `VARIA_SMOKE_MENU_STYLE=native|custom` picks the context-menu style (so the native path runs
-  on Linux too). `scripts/packaged-smoke.mjs` and `portable-smoke.mjs` take the built app from `VARIA_PACKAGED_EXECUTABLE`
+  on Linux too). `VARIA_SMOKE_RECORD=1` makes the suites that support it (`agent-flow-run`) record the window as an animated PNG
+  in `artifacts/` (`scripts/fixtures/recording.mjs`), for reviewing live behaviour; CI never sets it. `scripts/packaged-smoke.mjs` and `portable-smoke.mjs` take the built app from `VARIA_PACKAGED_EXECUTABLE`
   (with `VARIA_PACKAGED_PROFILE`) and `VARIA_PORTABLE_EXECUTABLE`. Only in unpackaged smoke runs main also honours:
   - `VARIA_TEST_BACKEND=<mode>` (runs `tests/fixtures/backend.mjs` under the absolute `VARIA_TEST_NODE`; `workbench`
     takes cues from `VARIA_TEST_BACKEND_DIR`), `VARIA_TEST_HOT_EXIT=0` (the fixture's default: no hot exit, so close
@@ -229,7 +232,7 @@ npm run test:smoke:wsl -- --all
     `motion: true`: the renderer reduces motion whenever the emulated `prefers-reduced-motion` asks, without the
     Reduce motion when the system asks setting), `VARIA_TEST_WINDOW_STATE=1` (the main window keeps its place between
     launches, and main sets `globalThis.__variaWindowPlacement`; docs/popout-windows.md), `VARIA_BACKEND_LIVENESS_MS`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test
-    cipher);
+    cipher) or `=none` (a system with no key store: Remember password and the saved search index are unavailable);
   - `globalThis.__variaTest` (kill, pid, state, states, synthesize, and the renderer hooks rendererLosses,
     holdNextRenderer and releaseHolders);
   - the renderer's test mode: `window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()` (saves

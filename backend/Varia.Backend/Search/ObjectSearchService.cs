@@ -18,12 +18,17 @@ internal interface IObjectSearchHost
     /// SQL Database, which cannot EXEC across databases.</summary>
     SqlConnection Connection(string connectionId, string? database);
     Task OpenAsync(SqlConnection connection, CancellationToken token);
+    /// <summary>The database the connection signed in to, which names a contained database user's account beside its SID; null
+    /// when unknown (nothing of such a user's index is then saved).</summary>
+    string? HomeDatabase(string connectionId) => null;
 }
 
 /// <summary>
 /// explorer.index and explorer.search: an in-memory index per connection of the objects Object Explorer lists by schema and
 /// name (and their module definitions), read two databases at a time (<see cref="ObjectIndexLimits.Total"/>) from constant catalog SQL (<see cref="ObjectSearchSql"/>),
-/// and searched in memory. Nothing reaches disk; a disconnect drops the connection's index. A database that cannot be read is
+/// and searched in memory. A disconnect drops the connection's index; each read it held whole is saved by the
+/// <see cref="IndexStore"/> (when main has configured one), which a connection's first build reads back once its fingerprint matches
+/// (<see cref="ReloadAsync"/>). A database that cannot be read is
 /// skipped as a value, and the index keeps every other one.
 /// </summary>
 internal sealed partial class ObjectSearchService : IDisposable
@@ -41,6 +46,15 @@ internal sealed partial class ObjectSearchService : IDisposable
     public const int MaxSkipped = 256;
     /// <summary>The least time between two explorer.index.progress EVENTs of one build.</summary>
     public static readonly TimeSpan ProgressEvery = TimeSpan.FromMilliseconds(250);
+    /// <summary>How often a BigQuery build checks whether its principal's throttling changed, to say so when no read finishes.</summary>
+    internal TimeSpan ThrottleWatchEvery { get; set; } = TimeSpan.FromSeconds(1);
+    /// <summary>How many more ticks a change in throttling is sent again on, since a dropped progress EVENT is never sent again.</summary>
+    internal const int ThrottleRepeats = 2;
+
+    /// <summary>Whether a BigQuery build's progress count (done or total) replaces the last one reported: within a phase a count
+    /// only rises, since racing reporters may read it out of order; a new phase or the phase's last report always replaces it.</summary>
+    internal static bool ProgressReplaces(bool last, string phase, string? lastPhase, int value, int lastValue) =>
+        last || phase != lastPhase || value >= lastValue;
     /// <summary>The most kinds one search may name.</summary>
     public const int MaxKinds = 64;
     public static readonly string[] Kinds = ["table", "view", "procedure", "function", "synonym", "sequence", "trigger", "type", "tableType", "databaseTrigger", "login", "serverRole", "credential", "cryptographicProvider", "audit", "serverAuditSpecification", "backupDevice", "linkedServer", "serverTrigger", "database", "user", "databaseRole", "applicationRole", "schema", "assembly", "asymmetricKey", "certificate", "symmetricKey", "columnMasterKey", "columnEncryptionKey", "databaseAuditSpecification", "externalDataSource", "externalFileFormat", "fullTextCatalog", "fullTextStoplist", "partitionScheme", "partitionFunction", "searchPropertyList", "planGuide", "xmlSchemaCollection", "rule", "default", "securityPolicy", "column", "key", "constraint", "index", "statistic", "parameter", "agentJob", "agentAlert", "agentOperator"];
@@ -56,13 +70,15 @@ internal sealed partial class ObjectSearchService : IDisposable
     public const string ChildrenLeftOut = "CHILDREN_LEFT_OUT";
 
     /// <summary>One connection's index and its build.</summary>
-    private sealed class State(StringPool pool, ResourceCatalog resources)
+    private sealed partial class State(StringPool pool, ResourceCatalog resources)
     {
         public readonly object Gate = new();
         public ConnectionIndex Index { get; } = new(pool.Budget, resources, pool);
         public CancellationTokenSource? Build;
         public bool Building;
         public bool Built;
+        /// <summary>The last full build was stopped (Stop or a disconnect, not a newer build) before it finished.</summary>
+        public bool Stopped;
         public bool Definitions = true;
         public int Databases;
         public int Indexed;
@@ -98,9 +114,22 @@ internal sealed partial class ObjectSearchService : IDisposable
         /// with no target and no default dataset), by project (under Gate): the next stale-only build lists the project again and
         /// reads every dataset in it whole.</summary>
         public readonly Dictionary<string, long> StaleProjects = new(StringComparer.Ordinal);
+        /// <summary>BigQuery reads loaded from the saved index that no listing has checked yet, by key, with the file each came
+        /// from (under Gate): the status says how old they are while the build that checks them runs.</summary>
+        /// The read is held weakly: one replaced or dropped (its charge given back) is not kept alive here.
+        public readonly Dictionary<string, (WeakReference<DatabaseIndex> Read, SavedUnit Unit, long Ticks)> Saved = new(StringComparer.Ordinal);
+        /// <summary><see cref="Saved"/>'s entries by when each was read (UTC ticks), oldest first (under Gate).</summary>
+        public readonly SortedSet<(long Ticks, string Key)> SavedOrder = [];
+        /// <summary>Whether a full build has loaded the connection's saved index (once, when the store reads; under Gate).</summary>
+        public bool SavedLoaded;
+        /// <summary>When the oldest of <see cref="Saved"/> was read, and as the status's text (read by the progress without Gate).</summary>
+        public DateTime? SavedAt;
+        public volatile string? SavedAtText;
         /// <summary>The newest stale mark not yet spent, or null: index status carries it so the renderer asks a stale-only
         /// build once per new mark (never again for a mark a failed read left).</summary>
-        public long? StaleMark => Stale.Count + StaleProjects.Count == 0 ? null : Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max());
+        public long? StaleMark => Stale.Count + StaleProjects.Count + SqlStale.Count + Due.Count == 0 ? null
+            : Math.Max(Math.Max(Stale.Count == 0 ? 0 : Stale.Values.Max(), StaleProjects.Count == 0 ? 0 : StaleProjects.Values.Max()),
+                Math.Max(SqlStale.Count == 0 ? 0 : SqlStale.Values.Max(), Due.Count == 0 ? 0 : Due.Values.Max()));
     }
 
     public ObjectSearchService(IObjectSearchHost host, ObjectIndexLimits? limits = null)
@@ -109,12 +138,67 @@ internal sealed partial class ObjectSearchService : IDisposable
         Limits = limits ?? new ObjectIndexLimits();
         budget = new IndexBudget(Limits.MemoryBytes);
         pool = new StringPool(budget);
-        resources = new ResourceCatalog(pool, Limits.NamesReserveBytes);
+        resources = new ResourceCatalog(pool, () => Limits.NamesReserveBytes);
         total = new SemaphoreSlim(Limits.Total);
         running = new RequestRegistry(64, "object index");
+        Store.Opened = SaveHeld;
+    }
+
+    /// <summary>Queues a save of what every connection's index holds: the store has just started saving (main configures it a
+    /// moment after a backend starts, and a connection restored at startup may have built by then), or saves under another
+    /// key. A BigQuery dataset DDL has marked stale since its read is left for the build that reads it again.</summary>
+    private void SaveHeld()
+    {
+        foreach (var state in states.Values)
+            lock (state.Gate)
+                state.Index.Announce(read => read.Dataset is not { } dataset || !state.Stale.ContainsKey((read.Database, dataset)) && !state.StaleProjects.ContainsKey(read.Database));
+    }
+
+    /// <summary>The saved index: every connection's reads are queued here as they are held (<see cref="ConnectionIndex.Sink"/>).</summary>
+    internal IndexStore Store { get; } = new();
+
+    /// <summary>Whose saved index a SQL Server connection's units are: the server as it names itself and the account that signed
+    /// in. Where the server's own objects are read in the connection's database rather than master (a contained database user,
+    /// Azure SQL Database), what a connection sees depends on that database, so it is part of whose index it is.</summary>
+    internal IndexStoreScope? ScopeOf(string connectionId, ServerProfile profile)
+    {
+        var own = !profile.ServerScopeInMaster;
+        return IndexStoreScope.SqlServer(profile.ServerName, profile.PrincipalId, own, own ? host.HomeDatabase(connectionId) : null);
     }
 
     public ObjectIndexLimits Limits { get; }
+    /// <summary>A check's hook: called when a BigQuery build's names pass has held a dataset's read (or left it as it was, or
+    /// given it up for the listing's error).</summary>
+    internal Action<string, string>? NamesHeld { get; set; }
+    /// <summary>A check's hook: called when a BigQuery build's names pass stops reading new discovered datasets for memory.</summary>
+    internal Action? NamesStopped { get; set; }
+
+    /// <summary>explorer.index's memoryLimitMiB, checked: the limit every connection's index shares from this build on, with the
+    /// names' reserve (and so BigQuery's floors) in proportion. Nothing held is dropped: a rebuild charges its predecessor's
+    /// share first, so an index over a lowered limit keeps what it has until its connection closes.</summary>
+    internal void SetMemoryLimit(int? mib)
+    {
+        if (CheckMemoryLimit(mib) is not { } checkedMiB) return;
+        var bytes = checkedMiB * 1024L * 1024;
+        var reserve = bytes / ObjectIndexLimits.NamesReserveShare;
+        lock (limitGate)
+        {
+            if (Limits.MemoryBytes == bytes && budget.Limit == bytes) return;
+            // Reads running on other connections take no lock: the reserve (and the floors that follow from it) is never larger
+            // than the limit in force allows, so a read between the two writes is refused nothing it would have been given
+            // (it may for that instant be given what the smaller reserve allows under the larger limit).
+            if (bytes < budget.Limit) Limits.NamesReserveBytes = reserve;
+            budget.Limit = bytes;
+            Limits.MemoryBytes = bytes;
+            Limits.NamesReserveBytes = reserve;
+        }
+    }
+
+    private readonly object limitGate = new();
+
+    /// <summary>Refuses a memory limit outside its bounds; a build checks it before it does anything else.</summary>
+    internal static int? CheckMemoryLimit(int? mib) =>
+        mib is < ObjectIndexLimits.MinMemoryMiB or > ObjectIndexLimits.MaxMemoryMiB ? throw Invalid("memoryLimitMiB.") : mib;
     /// <summary>The memory every connection's index holds (the checks read it).</summary>
     public long MemoryUsed => budget.Used;
     /// <summary>The shared resource sets and their distinct definitions (the checks read it).</summary>
@@ -207,21 +291,31 @@ internal sealed partial class ObjectSearchService : IDisposable
         var watch = Stopwatch.StartNew();
         if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
         if (!Guid.TryParse(args.RequestId, out _)) throw Invalid("requestId.");
+        CheckMemoryLimit(args.MemoryLimitMiB);
         var profile = host.Profile(args.ConnectionId);
         var explorer = profile.Explorer(ExplorerCatalog.Current);
         var perDatabase = explorer.Cloud;
         var render = IndexRender(profile);
+        if (args.Database is { } checkDatabase && (!ExplorerRefs.Ident(checkDatabase) || args.Stale != true)) throw Invalid("database.");
+        if (args.CheckAll is not null && (args.CheckAll != true || args.Stale != true || args.Database is not null)) throw Invalid("checkAll.");
+        SetMemoryLimit(args.MemoryLimitMiB);
         var state = states.GetOrAdd(args.ConnectionId, _ => new State(pool, resources));
+        state.Index.Sink ??= Store.Sink(ScopeOf(args.ConnectionId, profile));
+        if (args.Stale == true) return await CheckSqlAsync(args, state, profile, token, progress);
         using var source = CancellationTokenSource.CreateLinkedTokenSource(token);
         var entry = running.Register(args.RequestId, args.ConnectionId, source);
         var definitions = args.Definitions ?? true;
         var finishedBuild = false;
+        long seen;
         lock (state.Gate)
         {
-            // A newer build supersedes a running one, which answers CANCELLED and keeps what it read.
+            // A newer build supersedes a running one (or a check), which answers CANCELLED and keeps what it read.
             try { state.Build?.Cancel(); } catch (ObjectDisposedException) { }
             state.Build = source;
             state.Building = true;
+            state.Checking = false;
+            // The marks this build spends: those made before it began (DDL that lands while it reads stays marked).
+            seen = state.StaleMarks;
             state.Definitions = definitions;
             state.Indexed = 0;
             state.Skipped = new(MaxSkipped);
@@ -230,14 +324,35 @@ internal sealed partial class ObjectSearchService : IDisposable
         try
         {
             var names = await ListAsync(args.ConnectionId, source.Token);
+            var listed = names.ToHashSet(StringComparer.Ordinal);
             lock (state.Gate)
             {
                 state.Databases = names.Count;
                 state.Ledger.List(names);
+                if (ReferenceEquals(state.Build, source)) { state.Listed = listed; PruneLocked(state); }
+                foreach (var gone in state.SqlStale.Keys.Concat(state.Due.Keys).Where(key => key.Length > 0 && !listed.Contains(key)).ToList())
+                {
+                    state.SqlStale.Remove(gone);
+                    state.Due.Remove(gone);
+                }
             }
-            state.Index.Keep(names.ToHashSet(StringComparer.Ordinal));
-            if (await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token) is { } serverSkip)
+            state.Index.Keep(listed);
+            // Spends a unit's marks made before the build began, once it has read the unit.
+            void Spend(string key, bool read)
+            {
+                lock (state.Gate)
+                {
+                    if (!ReferenceEquals(state.Build, source)) return;
+                    if (state.SqlStale.TryGetValue(key, out var mark) && mark <= seen) state.SqlStale.Remove(key);
+                    if (state.Due.TryGetValue(key, out var due) && due <= seen) state.Due.Remove(key);
+                    if (read) CheckedLocked(state, key);
+                    else state.Tried[key] = UtcNow().Ticks;
+                }
+            }
+            var serverRead = await ReadServerAsync(args.ConnectionId, state, !explorer.Cloud, definitions, source.Token);
+            if (serverRead is { } serverSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Server, serverSkip);
+            Spend(ServerScope, serverRead is null);
             if (explorer.Agent is { } platform && await ReadAgentAsync(args.ConnectionId, state, Varia.Backend.Agent.AgentCatalog.Current.Offers("alerts", platform), source.Token) is { } agentSkip)
                 lock (state.Gate) state.Skipped.Add(SkipList.Agent, agentSkip);
             if (await ReadResourceAsync(args.ConnectionId, profile, state, definitions, source.Token) is { } resourceSkip)
@@ -250,10 +365,11 @@ internal sealed partial class ObjectSearchService : IDisposable
                     if (skip is not null) state.Skipped.Add(at, skip);
                     state.Ledger.Done(names[at], skip);
                 }
+                Spend(names[at], skip is null or { Code: ChildrenLeftOut });
             }, progress is null ? null : done => progress(new { Type = "explorer.index.progress", Done = done, Total = names.Count, Objects = state.Index.Objects }), source.Token);
             lock (state.Gate)
             {
-                if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.BuiltAt = DateTime.UtcNow; }
+                if (ReferenceEquals(state.Build, source)) { state.Building = false; state.Built = true; state.Stopped = false; state.BuiltAt = DateTime.UtcNow; }
             }
             Finish(build: true, watch.ElapsedMilliseconds);
             finishedBuild = true;
@@ -261,6 +377,8 @@ internal sealed partial class ObjectSearchService : IDisposable
         }
         catch (Exception error) when (error is OperationCanceledException || (error is SqlException && source.IsCancellationRequested))
         {
+            // Stopped, not superseded: what it read stays, and the status says the index is partial until a build finishes.
+            lock (state.Gate) if (ReferenceEquals(state.Build, source)) state.Stopped = true;
             throw new RequestException("CANCELLED", "The object index build was stopped.");
         }
         catch (SqlException error)
@@ -282,6 +400,16 @@ internal sealed partial class ObjectSearchService : IDisposable
         }
     }
 
+    /// <summary>explorer.indexStatus: the index as it stands, so a window learns what a stopped build kept (its CANCELLED answer
+    /// carries no status). <paramref name="bigQuery"/> for a BigQuery handle, whose connection SqlService has already checked.</summary>
+    public ObjectIndexResult IndexStatus(ObjectIndexStatusArgs args, bool bigQuery = false)
+    {
+        if (!Guid.TryParse(args.ConnectionId, out _)) throw Invalid("connectionId.");
+        if (!bigQuery) host.Profile(args.ConnectionId);
+        return new(states.TryGetValue(args.ConnectionId, out var state) ? Status(state)
+            : new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null, Projects: bigQuery ? 0 : null), 0);
+    }
+
     /// <summary>explorer.search; <paramref name="bigQuery"/> for a BigQuery handle, whose search narrows by Project and Dataset (never
     /// Database) and whose connection SqlService has already checked.</summary>
     public ObjectSearchResult Search(ObjectSearchArgs args, CancellationToken token, bool bigQuery = false)
@@ -291,6 +419,9 @@ internal sealed partial class ObjectSearchService : IDisposable
         token.ThrowIfCancellationRequested();
         if (!bigQuery) host.Profile(args.ConnectionId);
         if (!states.TryGetValue(args.ConnectionId, out var state)) return new([], 0, false, 0, new("none", 0, 0, 0, 0, 0, [], true, Provider: bigQuery ? Providers.BigQuery : null, Projects: bigQuery ? 0 : null));
+        // A unit the search reads that was checked longer ago than its threshold is due: the status names a new mark, and the
+        // renderer asks one check for it, while this search answers from what is held.
+        lock (state.Gate) DueOnUseLocked(state, args.Database, args.Project, args.Dataset);
         var status = Status(state);
         var (matcher, problem) = SearchMatcher.Create(query.Text, query.CaseSensitive, query.WholeWord, query.Regex, Limits.MatchTimeout);
         if (matcher is null) return new([], 0, false, 0, status, problem);
@@ -327,6 +458,8 @@ internal sealed partial class ObjectSearchService : IDisposable
     {
         running.Forget(connectionId);
         if (!states.TryRemove(connectionId, out var state)) return;
+        lock (state.Gate) state.Closed = true;
+        StopSweep(state);
         state.Index.Dispose();
         // Forgets before finished, as with builds; finished sends a report even when the dropped index freed no byte (a shared set).
         Interlocked.Increment(ref forgets);
@@ -336,8 +469,13 @@ internal sealed partial class ObjectSearchService : IDisposable
     public void Dispose()
     {
         running.ForgetAll();
-        foreach (var state in states.Values) state.Index.Dispose();
+        foreach (var state in states.Values)
+        {
+            StopSweep(state);
+            state.Index.Dispose();
+        }
         states.Clear();
+        Store.Dispose();
     }
 
     internal static SearchQuery Validate(ObjectSearchArgs args)
@@ -369,22 +507,42 @@ internal sealed partial class ObjectSearchService : IDisposable
         var databases = state.Index.Databases;
         lock (state.Gate)
         {
+            bool? stopped = !state.Building && state.Stopped ? true : null;
             if (state.BigQuery)
             {
                 // Datasets: those this build lists while it runs, else those the index holds and those it skipped.
                 var held = databases.Count(value => value.Dataset is not null);
                 var projects = databases.Where(value => value.Dataset is not null).Select(value => value.Database).Distinct(StringComparer.Ordinal).Count();
                 var skipped = state.Skipped.ToList();
+                var (bigQueryLeftOut, bigQueryLeftOutIn) = (Total(databases.Select(value => value.LeftOut)), databases.Count(value => value.LeftOut > 0));
+                var savedAt = SavedAtText(SavedAtLocked(state));
+                var (bigQueryReadAt, bigQuerySaved, bigQueryChecked, bigQueryStale, bigQueryUnverified) = FreshnessLocked(state, databases);
                 return new(state.Building ? "building" : state.Built || held > 0 ? "ready" : "none",
                     state.Building ? state.Databases : held + skipped.Count(skip => skip.Database.Length > 0 && skip.Code is not ChildrenLeftOut && !databases.Any(value => value.Database == skip.Project && value.Dataset == skip.Database)),
-                    state.Building ? state.Indexed : held, state.Index.Objects, databases.Sum(value => value.Modules), databases.Sum(value => value.Cut), skipped, state.Definitions,
-                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark);
+                    state.Building ? state.Indexed : held, state.Index.Objects, Total(databases.Select(value => value.Modules)), Total(databases.Select(value => value.Cut)), skipped, state.Definitions,
+                    state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), Providers.BigQuery, state.Building ? state.Phase : null, state.NamesOnly is { Count: > 0 } names ? names : null, state.Bulk, projects, state.StaleMark, stopped,
+                    bigQueryLeftOut > 0 ? bigQueryLeftOut : null, bigQueryLeftOut > 0 ? bigQueryLeftOutIn : null, savedAt, bigQueryReadAt, bigQuerySaved, bigQueryChecked,
+                    state.Checking ? true : null, bigQueryStale, bigQueryUnverified);
             }
-            return new(state.Building ? "building" : state.Built ? "ready" : databases.Count > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
-                state.Index.Objects, databases.Sum(value => value.Modules) + (state.Index.Resource?.Modules ?? 0) + (state.Index.Server?.Modules ?? 0),
-                databases.Sum(value => value.Cut) + (state.Index.Resource?.Cut ?? 0) + (state.Index.Server?.Cut ?? 0), state.Skipped.ToList(), state.Definitions,
-                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture));
+            // LeftOutIn counts databases only: the server's own objects and the system objects are in none.
+            var leftOut = Total(databases.Select(value => value.LeftOut).Append(state.Index.Resource?.LeftOut ?? 0).Append(state.Index.Server?.LeftOut ?? 0));
+            var leftOutIn = databases.Count(value => value.LeftOut > 0);
+            var (readAt, saved, checkedAt, stale, unverified) = FreshnessLocked(state, databases);
+            // A stopped first build that read only the server's own objects still holds an index.
+            return new(state.Building ? "building" : state.Built || databases.Count > 0 || state.Index.Objects > 0 ? "ready" : "none", state.Databases, state.Building ? state.Indexed : databases.Count,
+                state.Index.Objects, Total(databases.Select(value => value.Modules).Append(state.Index.Resource?.Modules ?? 0).Append(state.Index.Server?.Modules ?? 0)),
+                Total(databases.Select(value => value.Cut).Append(state.Index.Resource?.Cut ?? 0).Append(state.Index.Server?.Cut ?? 0)), state.Skipped.ToList(), state.Definitions,
+                state.BuiltAt?.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture), StaleMark: state.StaleMark, Stopped: stopped, LeftOut: leftOut > 0 ? leftOut : null,
+                LeftOutIn: leftOutIn > 0 ? leftOutIn : null, ReadAt: readAt, Saved: saved, CheckedAt: checkedAt, Checking: state.Checking ? true : null, Stale: stale, Unverified: unverified);
         }
+    }
+
+    /// <summary>A sum of units' counts, held to an int: many large units (some loaded from files) never make a status throw.</summary>
+    internal static int Total(IEnumerable<int> counts)
+    {
+        long sum = 0;
+        foreach (var count in counts) sum += count;
+        return (int)Math.Min(int.MaxValue, sum);
     }
 
     /// <summary>Reads each database, at most <paramref name="degree"/> at once (each read still waits for one of the index's
@@ -392,8 +550,8 @@ internal sealed partial class ObjectSearchService : IDisposable
     /// and reports progress: Done 0 first, then completions, whichever read ends first, one call at a time, at most one per
     /// <see cref="ProgressEvery"/> but always the last. Each read takes the loop's token, so one that fails stops the read
     /// still in flight and its error comes out at once, rather than after that read's own budget.</summary>
-    internal static async Task ReadDatabasesAsync(IReadOnlyList<string> names, int degree, Func<string, CancellationToken, Task<ObjectIndexSkip?>> read,
-        Action<int, ObjectIndexSkip?> completed, Action<int>? progress, CancellationToken token)
+    internal static async Task ReadDatabasesAsync<T>(IReadOnlyList<string> names, int degree, Func<string, CancellationToken, Task<T>> read,
+        Action<int, T> completed, Action<int>? progress, CancellationToken token)
     {
         var last = Stopwatch.StartNew();
         progress?.Invoke(0);
@@ -489,25 +647,35 @@ internal sealed partial class ObjectSearchService : IDisposable
         await total.WaitAsync(token);
         // The budget is the read's own: time spent waiting for a slot behind other reads does not count.
         budgetSource.CancelAfter(Limits.DatabaseBudget);
-        var reader = new DatabaseReader(database, Limits, pool, state.Index.Databases.FirstOrDefault(value => value.Database == database));
+        var held = state.Index.Get(database);
+        var reader = new DatabaseReader(database, Limits, pool, held);
         var Put = Holding(state.Index, children);
         try
         {
             await using var connection = host.Connection(connectionId, perDatabase ? database : null);
             await host.OpenAsync(connection, budgetSource.Token);
+            // Nothing held yet (the connection's first build, or a database it could not read before): what was saved of it stands
+            // in only once its fingerprint says it still may, or once what changed has been read again.
+            // A read again without children (WithFallbackAsync) follows a reload that already answered for the database.
+            if (held is null && children && await ReloadAsync(connection, state, database, render, definitions, perDatabase, children, budgetSource.Token, token) is { } reloaded) return reloaded.Skip;
+            // The fingerprint is taken before the batch, and again after it (HoldVerifiedAsync), only where a file would keep it; one
+            // that fails leaves the read as it was, with nothing to compare next time.
+            var fingerprint = state.Index.Sink?.Scope is not null && Store.Saves ? await TryFingerprintAsync(connection, database, render, perDatabase, budgetSource.Token) : null;
+            if (fingerprint is null) reader.ListNothing();
             await using var command = connection.CreateCommand();
             command.CommandTimeout = 0;
-            var batch = ObjectSearchSql.Batch(render, definitions, children);
-            if (perDatabase) command.CommandText = ObjectSearchSql.Prologue + batch;
-            else
+            InDatabase(command, database, perDatabase, ObjectSearchSql.Batch(render, definitions, children));
+            DatabaseIndex? kept = null;
+            DatabaseIndex? index;
+            try { index = await ReadBatchAsync(command, rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), read => kept = read, budgetSource.Token); }
+            catch (Exception) when (kept is not null)
             {
-                command.CommandText = ObjectSearchSql.Prologue + ObjectSearchSql.ModuleCall;
-                command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
-                command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
+                // Read whole, then an error closing the batch: held, with nothing to compare.
+                Put(kept);
+                throw;
             }
-            var index = await ReadBatchAsync(command,
-                rows => reader.ReadAsync(rows, definitions, budgetSource.Token, children), Put, budgetSource.Token);
             if (index is null) return new(database, "TOO_LARGE", "The database does not fit in the index's memory (" + Size + " across every connection).");
+            await HoldVerifiedAsync(connection, database, render, perDatabase, fingerprint, index, reader.Listing, definitions, children, Put, token);
             return null;
         }
         catch (Exception error) when (error is OperationCanceledException or SqlException && budgetSource.IsCancellationRequested && !token.IsCancellationRequested)
@@ -529,6 +697,21 @@ internal sealed partial class ObjectSearchService : IDisposable
             throw;
         }
         finally { total.Release(); }
+    }
+
+    /// <summary>Sets <paramref name="command"/> to run <paramref name="batch"/> in <paramref name="database"/>: directly on a connection
+    /// already in it (<paramref name="perDatabase"/>), else through <see cref="ObjectSearchSql.ModuleCall"/> (with <paramref name="ids"/>,
+    /// <see cref="ObjectSearchSql.ModuleCallIds"/>), the name only as a parameter.</summary>
+    internal static void InDatabase(SqlCommand command, string database, bool perDatabase, string batch, string? ids = null)
+    {
+        if (perDatabase) command.CommandText = ObjectSearchSql.Prologue + batch;
+        else
+        {
+            command.CommandText = ObjectSearchSql.Prologue + (ids is null ? ObjectSearchSql.ModuleCall : ObjectSearchSql.ModuleCallIds);
+            command.Parameters.Add(new SqlParameter("@db", SqlDbType.NVarChar, 128) { Value = database });
+            command.Parameters.Add(new SqlParameter("@stmt", SqlDbType.NVarChar, -1) { Value = batch });
+        }
+        if (ids is not null) command.Parameters.Add(new SqlParameter("@ids", SqlDbType.NVarChar, -1) { Value = ids });
     }
 
     /// <summary>Puts a read into <paramref name="index"/>. A read without children is the fallback for a database too large with them
@@ -657,7 +840,15 @@ internal sealed partial class ObjectSearchService : IDisposable
                 key = new(profile.ProductVersion ?? profile.Major.ToString(CultureInfo.InvariantCulture), profile.EngineEdition, rows.GetInt64(0),
                     rows.IsDBNull(1) ? null : rows.GetDateTime(1), rows.IsDBNull(2) ? 0 : rows.GetInt32(2), definitions);
             }
-            if (state.Index.Resource?.Key == key) return null;
+            if (state.Index.Resource is { } held && held.Key == key)
+            {
+                // The set this connection holds is current. One whose definitions were left out for memory is read again once
+                // there is room above the names' reserve (as much again as the set's records take, so a build at the reserve's
+                // edge does not read it again for nothing), so raising the limit and rebuilding brings them back; one another
+                // connection has already retired is exchanged for the newer set whatever the room, since that costs nothing.
+                if (held.LeftOut == 0 || resources.Current(held) && budget.Free < Limits.NamesReserveBytes + held.Bytes) return null;
+                resources.Retire(held);
+            }
             // The shared read has its own connection and lifetime: other connections may wait for it, so stopping this build (or
             // disconnecting) stops only this wait, and the read ends only when every waiter has gone or its budget runs out.
             var set = await resources.AcquireAsync(key, async readToken =>
@@ -716,6 +907,18 @@ internal sealed class SkipList(int capacity)
     }
 
     public List<ObjectIndexSkip> ToList() => [.. items.Select(item => item.Skip)];
+
+    /// <summary>Removes the skips at a fixed place (<see cref="Server"/>, <see cref="Agent"/>) that <paramref name="match"/> picks: a
+    /// check that reads the server again replaces what an earlier read reported there, rather than adding to it.</summary>
+    public void RemoveFixed(int order, Func<ObjectIndexSkip, bool>? match = null) =>
+        items.RemoveAll(item => item.Order == order && order < 0 && (match is null || match(item.Skip)));
+
+    /// <summary>Removes a database's skips (a check read it again); the server's, Agent's and the resource database's stay.</summary>
+    public void Remove(string database)
+    {
+        var removed = items.RemoveAll(item => item.Order >= 0 && item.Skip.Database == database && item.Skip.Agent is null);
+        databases -= removed;
+    }
 }
 
 /// <summary>Reads the server batch (<see cref="ObjectSearchSql.Server"/>) or one database's batch (<see cref="ObjectSearchSql.Batch"/>)
@@ -735,6 +938,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private long creditLeft = credit?.Bytes ?? 0;
     private int modules;
     private int cut;
+    /// <summary>The part of <see cref="cut"/> left out whole below the names' reserve.</summary>
+    private int leftOut;
     /// <summary>The objects read so far, and the pool's copy of each distinct text the read holds a reference to (its texts).</summary>
     private readonly ObjectTable.Builder objects = new();
     /// <summary>Rows waiting for the object that lists them: children for their parent, history tables for their table.</summary>
@@ -744,6 +949,39 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private bool definitionsRead = true;
     private bool? caseSensitive;
     private bool dottedI;
+    /// <summary>The sys.objects rows the read listed (<see cref="SqlListing"/>), each with the entry it added (or -1); null where the
+    /// batch's first result set has no checksum column (a read of another shape).</summary>
+    private List<SqlListingRow>? listed;
+    private bool listing = true;
+
+    /// <summary>Keeps no listing of this read: nothing will compare it (no fingerprint, or nothing saved).</summary>
+    public void ListNothing() => listing = false;
+    /// <summary>A selective re-read's saved side (<see cref="Seed"/>), or null for a whole read.</summary>
+    private Merge? merge;
+
+    /// <summary>The listing the last <see cref="Partial"/> kept for the read's file, or null (none read, too large, or no room).</summary>
+    public byte[]? Listing { get; private set; }
+
+    /// <summary>The sys.objects rows the batch itself listed: a selective re-read's own (the checks count them).</summary>
+    public int Listed { get; private set; }
+
+    /// <summary>What a selective re-read carries over from the saved read it replaces: each kept entry where it went, the saved
+    /// entries' object ids, and what can only be set once the batch has read its own part (types, keys, a history table's table).</summary>
+    private sealed class Merge(DatabaseIndex from)
+    {
+        public readonly ObjectTable Table = from.Table;
+        /// <summary>Object ids to the read's entries: the kept objects and their kept child objects, then the batch's own.</summary>
+        public readonly Dictionary<int, int> Ids = [];
+        /// <summary>Saved entries to their object ids.</summary>
+        public readonly Dictionary<int, int> SavedIds = [];
+        public readonly Dictionary<int, int> Moved = [];
+        public readonly List<(int To, int From)> Typed = [];
+        public readonly List<(int To, int From)> Keys = [];
+        /// <summary>A kept history table and the object id of the table it is shown below.</summary>
+        public readonly List<(int To, int ViaId)> Via = [];
+        /// <summary>The saved listing's rows the read keeps, by their saved entries.</summary>
+        public readonly List<SqlListingRow> Carried = [];
+    }
 
     /// <summary>A read past the budget.</summary>
     private sealed class TooLarge : Exception;
@@ -753,6 +991,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         pool.Release(objects.Texts);
         objects.Clear();
+        listed = null;
+        Listing = null;
         budget.Release(taken);
         taken = 0;
         credited = 0;
@@ -776,16 +1016,147 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     {
         foreach (var (at, _, _) in pending) objects.Remove(at);
         pending.Clear();
-        var index = new DatabaseIndex(database, objects.Build(), taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
+        var table = objects.Build();
+        Listing = KeptListing();
+        var index = new DatabaseIndex(database, table, taken + credited, modules, cut, credited, credited > 0 ? credit : null, pooled: true)
         {
             // A read that failed part way (KeepPartial) says what it read as much as a whole one.
-            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI
+            DefinitionsLeftOut = !definitionsRead, CaseSensitive = caseSensitive, DottedI = dottedI, LeftOut = leftOut
         };
         objects.Clear();
         taken = 0;
         credited = 0;
         creditLeft = 0;
         return index;
+    }
+
+    /// <summary>The listing of the table just built: the batch's rows, then the saved rows a selective re-read kept, each with the
+    /// entry it is now; charged to the read, and left out (null) when it does not fit or is too large for a file.</summary>
+    private byte[]? KeptListing()
+    {
+        if (listed is null) return null;
+        Listed = listed.Count;
+        var rows = new List<SqlListingRow>(listed.Count + (merge?.Carried.Count ?? 0));
+        var ids = new HashSet<int>();
+        foreach (var row in listed)
+            if (ids.Add(row.Id)) rows.Add(row with { Entry = row.Entry < 0 ? -1 : objects.BuiltAt(row.Entry) });
+        if (merge is not null)
+            foreach (var row in merge.Carried)
+                if (ids.Add(row.Id)) rows.Add(row with { Entry = row.Entry < 0 ? -1 : objects.BuiltAt(row.Entry) });
+        listed = null;
+        if (SqlListing.ToBytes(rows) is not { } bytes || !TryCharge(bytes.Length, 0)) return null;
+        return bytes;
+    }
+
+    /// <summary>
+    /// Makes this read a selective re-read of <paramref name="from"/> (loaded from the saved index, its listing
+    /// <paramref name="saved"/>): every top-level object <paramref name="keeps"/> accepts is copied with its children, its
+    /// definition, its type and key details and the table a history table is shown below, charged as the batch's own rows are;
+    /// then <see cref="ReadAsync"/> reads the batch's part (<see cref="ObjectSearchSql.Batch"/>'s only) beside them. The named
+    /// objects, types, table types, DDL triggers and plan guides are never copied: the batch reads them whole. A read past the
+    /// budget answers false, having given back what it took.
+    /// </summary>
+    public bool Seed(DatabaseIndex from, IReadOnlyDictionary<int, SqlListingRow> saved, Func<int, bool> keeps)
+    {
+        var seed = new Merge(from);
+        var table = seed.Table;
+        merge = seed;
+        try
+        {
+            var children = new Dictionary<int, List<int>>();
+            for (var at = 0; at < table.Count; at++)
+                if (table.Parent(at) is var parent and >= 0)
+                {
+                    if (!children.TryGetValue(parent, out var list)) children[parent] = list = [];
+                    list.Add(at);
+                }
+            foreach (var (id, row) in saved)
+                if (row.Entry >= 0) seed.SavedIds[row.Entry] = id;
+            foreach (var row in saved.Values.OrderBy(row => row.Id))
+            {
+                if (row.Entry < 0 || table.Parent(row.Entry) >= 0 || !keeps(row.Id)) continue;
+                var to = Copy(table, row.Entry);
+                seed.Moved[row.Entry] = to;
+                if (table.Via(row.Entry) is var via and >= 0) seed.Via.Add((to, seed.SavedIds.GetValueOrDefault(via)));
+                if (!children.TryGetValue(row.Entry, out var kids)) continue;
+                foreach (var child in kids)
+                {
+                    var copied = Copy(table, child);
+                    objects.Attach(copied, to, table.System(child));
+                    seed.Moved[child] = copied;
+                }
+            }
+            foreach (var (id, row) in saved)
+            {
+                if (!keeps(id)) continue;
+                var moved = row.Entry >= 0 && seed.Moved.TryGetValue(row.Entry, out var at) ? at : -1;
+                if (moved >= 0) seed.Ids[id] = moved;
+                seed.Carried.Add(row with { Entry = moved });
+            }
+            return true;
+        }
+        catch (TooLarge)
+        {
+            Abandon();
+            merge = null;
+            return false;
+        }
+    }
+
+    /// <summary>Copies the saved entry <paramref name="from"/> (a kept object or one of its children) into the read: its names, its
+    /// definition (left out, and counted, where the pool refuses it below the names' reserve) and, for later, its details.</summary>
+    private int Copy(ObjectTable table, int from)
+    {
+        var name = Intern(table.Name(from));
+        var schema = table.Schema(from) is { } held ? Intern(held) : null;
+        var at = Add(new IndexedObject(table.Kind(from), table.Folder(from), schema, name, Modified: table.Modified(from), System: table.System(from), Subtype: table.Subtype(from)));
+        if (table.StoredDefinition(from) is { } stored)
+        {
+            var reserve = limits.NamesReserveBytes;
+            var copy = stored is PackedText packed ? (object?)Pooled(packed, reserve) : Pooled((string)stored, reserve);
+            if (copy is null) { cut++; leftOut++; }
+            else
+            {
+                modules++;
+                if (table.DefinitionCut(from)) cut++;
+                objects.SetDefinition(at, copy, table.DefinitionCut(from));
+            }
+        }
+        if (table.Typed(from) is not null) merge!.Typed.Add((at, from));
+        if (table.KeyColumns(from).Length > 0) merge!.Keys.Add((at, from));
+        return at;
+    }
+
+    /// <summary>Gives the kept entries the types the batch's types result set numbers now (by user_type_id; one no longer there is
+    /// left out).</summary>
+    private void CarryTyped(Dictionary<int, ushort> types)
+    {
+        if (merge is null) return;
+        foreach (var (to, from) in merge.Typed)
+        {
+            if (merge.Table.Typed(from) is not { } typed || !types.TryGetValue(typed.UserTypeId, out var type)) continue;
+            Charge(IndexMemory.TypedBytes);
+            objects.Details.SetTyped(to, type, typed.MaxLength, typed.Precision, typed.Scale, typed.Ordinal, typed.Flags);
+        }
+    }
+
+    /// <summary>Gives the kept indexes and keys their columns, and a kept foreign key the table it references as the read holds it
+    /// now (a kept one or one the batch read again; -1 when it holds none).</summary>
+    private void CarryKeys(Dictionary<int, int> byId)
+    {
+        if (merge is null) return;
+        foreach (var (to, from) in merge.Keys)
+        {
+            var referenced = merge.Table.Referenced(from);
+            var target = referenced >= 0 && merge.SavedIds.TryGetValue(referenced, out var id) && byId.TryGetValue(id, out var at) && !objects.Removed(at) && objects.Kind(at) == "table" ? at : -1;
+            Charge(IndexMemory.KeyBytes);
+            objects.Details.StartKey(to, target);
+            foreach (var column in merge.Table.KeyColumns(from))
+            {
+                Charge(IndexMemory.KeyColumnBytes);
+                objects.Details.AddKeyColumn(column.Column, column.Referenced, column.Flags);
+            }
+        }
     }
 
     /// <summary>The database's index, or null when it does not fit in the budget. Without
@@ -795,7 +1166,8 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         definitionsRead = definitions;
         try
         {
-            var byId = new Dictionary<int, int>();
+            var byId = merge?.Ids ?? [];
+            listed = listing && reader.FieldCount > 9 ? [] : null;
             while (await reader.ReadAsync(token))
             {
                 var id = reader.GetInt32(0);
@@ -807,17 +1179,20 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
                 var system = reader.GetBoolean(6);
                 var variant = reader.GetByte(7);
                 var current = reader.IsDBNull(8) ? 0 : reader.GetInt32(8);
+                var checksum = listed is null || reader.IsDBNull(9) ? 0 : reader.GetInt32(9);
+                var entry = -1;
                 if (ChildOf(type, parent) is { } child)
                 {
                     // Its parent may come later in id order, or be a table type (read next): placed once every parent is read.
-                    byId[id] = Add(new(child.Kind, child.Folder, null, name, Modified: modified, Subtype: child.Subtype));
+                    byId[id] = entry = Add(new(child.Kind, child.Folder, null, name, Modified: modified, Subtype: child.Subtype));
                     pending.Add((byId[id], parent, false));
                 }
                 else if (Map(type, schema, name, modified, system, variant) is { } item)
                 {
-                    byId[id] = Add(item);
+                    byId[id] = entry = Add(item);
                     if (variant is 6 or 7) pending.Add((byId[id], current, true));
                 }
+                listed?.Add(new(id, parent, modified.Ticks, checksum, entry));
             }
             await reader.NextResultAsync(token);
             while (await reader.ReadAsync(token))
@@ -860,11 +1235,13 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             {
                 await reader.NextResultAsync(token);
                 var types = await ReadTypes(reader, objects, Intern, Charge, token);
+                CarryTyped(types);
                 await Columns(reader, byId, types, definitions, token);
                 var indexes = await Indexes(reader, byId, token);
                 await Children(reader, byId, "statistic", "statistics", false, token);
                 await Parameters(reader, byId, types, token);
                 await Keys(reader, byId, indexes, token);
+                CarryKeys(byId);
             }
             await Definitions(reader, byId, definitions, token);
             // The last result set (ObjectSearchSql.CaseSensitive): absent from a batch that stopped short, which leaves it unknown.
@@ -898,6 +1275,13 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
     private void Place(Dictionary<int, int> byId)
     {
         int Owner(int id) => id != 0 && byId.TryGetValue(id, out var at) && !objects.Removed(at) ? at : -1;
+        // A kept history table is shown below its table as the read holds it now, kept or read again; with neither, it goes.
+        if (merge is not null)
+            foreach (var (to, via) in merge.Via)
+            {
+                if (Owner(via) is var table and >= 0 && objects.Kind(table) == "table") objects.SetVia(to, table);
+                else objects.Remove(to);
+            }
         foreach (var (at, owner, history) in pending)
         {
             if (!history) continue;
@@ -1357,10 +1741,11 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
         // Below the names' reserve with no credit for a slot, the pool refuses every definition the read does not hold yet: read
         // no more than a short one's length, which finds a repeated default or computed column expression (((0)), (getdate()))
         // the read already holds at no cost, rather than stream a long one only to throw it away.
-        if (creditLeft < IndexMemory.SlotBytes && budget.Limit - budget.Used < limits.NamesReserveBytes) return Repeated(reader, ordinal);
+        if (creditLeft < IndexMemory.SlotBytes && budget.Free < limits.NamesReserveBytes) return Repeated(reader, ordinal);
         var (text, longer) = ReadText(reader, ordinal, ref buffer, limits.DefinitionChars);
         if (text.Length == 0) return (None, false);
-        if ((PackedText.TryPack(text) is { } packed ? (object?)Pooled(packed, limits.NamesReserveBytes) : Pooled(text, limits.NamesReserveBytes)) is not { } copy) { cut++; return (None, false); }
+        var reserve = limits.NamesReserveBytes;
+        if ((PackedText.TryPack(text) is { } packed ? (object?)Pooled(packed, reserve) : Pooled(text, reserve)) is not { } copy) { cut++; leftOut++; return (None, false); }
         modules++;
         if (longer) cut++;
         return (copy, longer);
@@ -1385,6 +1770,7 @@ internal sealed class DatabaseReader(string database, ObjectIndexLimits limits, 
             return (copy, false);
         }
         cut++;
+        leftOut++;
         return (None, false);
     }
 

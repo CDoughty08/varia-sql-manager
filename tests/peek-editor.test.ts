@@ -149,7 +149,7 @@ describe('Peek editor', () => {
     expect(hosts[0]!.hidden).toBe(false)
     // Its widget host is marked as Peek's, so a press on a hover or message widget does not close the card.
     expect(hosts[0]!.attributes).toEqual({ 'data-query-editor-id': 'peek-1', [peekEditorAttribute]: '' })
-    expect(created).toMatchObject({ theme: 'varia', fontSize: 15, lineNumbers: 'on', readOnly: true, tabFocusMode: true, glyphMargin: false, padding: { top: 4 }, ariaLabel: 'Definition text', contextmenu: false })
+    expect(created).toMatchObject({ theme: 'varia', fontSize: 15, lineNumbers: 'on', readOnly: true, tabFocusMode: true, glyphMargin: false, padding: { top: 4 }, ariaLabel: 'Definition text', contextmenu: false, wordBasedSuggestions: 'off', acceptSuggestionOnEnter: 'off' })
     expect(created?.readOnlyMessage).toEqual({ value: expect.stringContaining('Script to New Query') })
     expect(contextKeys).toEqual([[peekEditorContextKey, true]])
     expect(listeners).toEqual([])
@@ -163,7 +163,7 @@ describe('Peek editor', () => {
     createQueryEditor(workbench as never, container)
     expect(hosts[1]!.hidden).toBe(true)
     expect(hosts[1]!.attributes).toEqual({ 'data-query-editor-id': 'peek-1' })
-    expect(created).toMatchObject({ glyphMargin: true, padding: { top: 16 } })
+    expect(created).toMatchObject({ glyphMargin: true, padding: { top: 16 }, wordBasedSuggestions: 'off', acceptSuggestionOnEnter: 'off' })
     expect(created).not.toHaveProperty('readOnly')
     expect(listeners.length).toBeGreaterThan(0)
     vi.unstubAllGlobals()

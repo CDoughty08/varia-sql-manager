@@ -14,7 +14,7 @@ import { useCommandEnabled, useKeybindingLabel } from '../core/useCommand'
 import { withKey } from '../query-context'
 import { documentInfo, documentKind, isCustomKind, isQueryDocument, isTextDocument, type QueryTab } from '../documents'
 import { DockingGuides } from '../docking-guides'
-import { afterPointer } from './pointer'
+import { plainShiftPress } from './shift-press'
 import TabShelves from './TabShelves'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import EnvironmentTag from '../EnvironmentTag'
@@ -58,7 +58,7 @@ import { multiTargetTriggerSummary, resolveMultiTargets } from '../MultiTargetPo
  * The query editor panel's editor groups (docs/editor-groups.md): a Dockview of its own inside the workbench's editor
  * panel, one panel per open document. Each group has its own tab strip and one Monaco editor, which moves into whichever
  * text document the group shows; DocumentService keeps the documents and their models. Tabs drag along a strip, into
- * another group, onto a group's side to split it (the compass shows where), or Shift-drag to float over the editor area.
+ * another group, onto a group's side to split it (the compass shows where); Float Editor floats one over the editor area.
  */
 
 /** One editor group's Monaco editor and the element it lives in, which moves into the text document the group shows. */
@@ -363,9 +363,9 @@ function EmptyEditor({ group }: IWatermarkPanelProps) {
   const open = useServiceSelector(documents, snapshot => snapshot.documents.length > 0)
   if (!restored) return null
   const newQuery = { label: 'New query', run: () => void commands.execute('file.new', undefined, 'toolbar') }
-  // With no group there is no header: the editor panel's ⋯ menu stays at the top right; an empty group has its own. Dockview
-  // floats a group's last tab (Shift-drag, a tab released outside the area); the grid then keeps an empty group (`keepGrid`),
-  // which says the queries float.
+  // With no group there is no header: the editor panel's ⋯ menu stays at the top right; an empty group has its own.
+  // When every query floats (the grid's last tab dragged onto a floating group or released away from the guides, or a
+  // layout restored that way), the grid keeps an empty group (`keepGrid`), which says the queries float.
   const state = open
     ? <EmptyState className="workspace-empty" icon="file-code" title="All open queries float" detail="Dock one to bring it back here, or drag its tab into this area."
       actions={[{ label: 'Dock query', run: () => void commands.execute('editor.dock', undefined, 'toolbar'), primary: true }, newQuery]} />
@@ -478,7 +478,6 @@ class EditorAreaController implements Area, EditorGroupHost {
   private regions?: { refresh(): void }
   private keepingGrid = false
   private sortingPins = false
-  private pointer?: ReturnType<typeof afterPointer>
   private status?: { editor: QueryEditorInstance['instance']; binding: { dispose(): void } }
   constructor(private readonly workbench: Workbench) {}
 
@@ -507,9 +506,12 @@ class EditorAreaController implements Area, EditorGroupHost {
       documents.useTextFocus(id => this.focusText(id)),
       editorGroups.attach(this),
       this.regions = nameGroupRegions(root),
-      this.pointer = afterPointer(),
       followFocus(root, inside => { this.focusInArea = inside; if (!inside) documents.dropPendingFocus() }),
       chooseFocusedTabs(root, id => { if (documents.getSnapshot().activeId !== id) api.getPanel(id)?.api.setActive() }),
+      plainShiftPress(root, {
+        docked: element => api.groups.find(group => group.element.contains(element))?.api.location.type === 'grid',
+        choose: id => api.getPanel(id)?.api.setActive()
+      }),
       bindServerDrop(root, this.workbench.serverDrop, {
         insertHeld: event => this.workbench.gestures.matches('explorer.dropServerName', event),
         activateGroupOf: element => api.groups.find(group => group.element.contains(element))?.api.setActive(),
@@ -581,9 +583,10 @@ class EditorAreaController implements Area, EditorGroupHost {
     Object.defineProperty(panel.api, 'close', { configurable: true, value: () => { void this.workbench.commands.execute('file.close', { tabId: id }, 'keybinding') } })
   }
   /**
-   * The grid keeps a group: when every document floats (Dockview floats a group's last tab), an empty one stays behind the
-   * floating groups, whose watermark says they float; it goes once another grid group shows a document, or once no
-   * document is left (the area's own empty state). With no room under the cap for it, a floating group docks instead.
+   * The grid keeps a group: when every document floats (its last tab dragged into a float or off the guides), an empty
+   * one stays behind the floating groups, whose watermark says they float; it goes once another grid group shows a
+   * document, or once no document is left (the area's own empty state). With no room under the cap for it, a floating
+   * group docks instead.
    */
   private keepGrid(): void {
     const api = this.api
@@ -595,12 +598,8 @@ class EditorAreaController implements Area, EditorGroupHost {
       else if (!grid.length) {
         const active = api.activeGroup ?? api.groups[0]
         if (api.groups.length >= editorGroupLimits.groups) {
-          // A Shift-drag float is still following the pointer: the group docks once it lands, not under the drag.
-          if (this.pointer?.held()) this.pointer.then(() => { this.keepGrid(); this.publish() })
-          else {
-            active.api.moveTo({ position: 'right' })
-            this.workbench.commands.reportWarning(`The query editor shows at most ${editorGroupLimits.groups} editor groups.`)
-          }
+          active.api.moveTo({ position: 'right' })
+          this.workbench.commands.reportWarning(`The query editor shows at most ${editorGroupLimits.groups} editor groups.`)
         } else {
           api.addGroup({ direction: 'right' })
           active.api.setActive()

@@ -338,7 +338,7 @@ export class BigQueryCostService extends SnapshotStore<EstimateSnapshot> impleme
     let response: ApiResult<BigQueryDryRunResult>
     // Single-server tabs use their tab id as sessionId so temp tables/variables estimate in-session; multi-target tabs use ephemeral sessions.
     const isMulti = !!this.deps.documents.get(entry.id)?.multiMode
-    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : {}, ...isMulti ? {} : { sessionId: entry.id } }) }
+    try { response = await this.deps.api.bigQueryDryRun({ connectionId: connection.id, sql, ...dataset ? { dataset } : { noDefaultDataset: true }, ...isMulti ? {} : { sessionId: entry.id } }) }
     catch (error) { response = { ok: false, error: error instanceof Error ? error.message : 'The dry run failed.' } as ApiResult<BigQueryDryRunResult> }
     const current = !this.disposed && this.entries.get(entry.id) === entry && !entry.model.isDisposed() && entry.revision === revision
     if (!current) {

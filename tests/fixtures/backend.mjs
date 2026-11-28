@@ -343,27 +343,62 @@ const spacedDatabases = ['Sales  2024', 'Sales 2024', ' lead', 'tab\there'].map(
 const bigQueryIndex = {
   'varia-fake': {
     sales: {
-      orders: { kind: 'bqTable', rows: 1200, bytes: 5 * 1024 * 1024, partitioning: 'DAY on placed', columns: [
+      orders: { kind: 'bqTable', rows: 1200, bytes: 5 * 1024 * 1024, partitioning: 'DAY on placed', clustering: 'customer',
+        description: 'Core ecommerce order ledger, updated hourly.', columns: [
         { name: 'id', type: 'INT64', nullable: false }, { name: 'customer', type: 'STRING', nullable: true }, { name: 'placed', type: 'TIMESTAMP', nullable: true },
-        { name: 'address', type: 'STRUCT', subtype: 'struct', nullable: true }, { name: 'address.city', type: 'STRING', nullable: true }] },
-      customers: { kind: 'bqTable', rows: 40, bytes: 4096, columns: [{ name: 'id', type: 'INT64', nullable: false }, { name: 'name', type: 'STRING', nullable: true }] },
-      daily: { kind: 'bqView', columns: [{ name: 'day', type: 'DATE', nullable: true }, { name: 'total', type: 'NUMERIC', nullable: true }] }
+        { name: 'address', type: 'STRUCT', subtype: 'struct', nullable: true }, { name: 'address.city', type: 'STRING', nullable: true },
+        { name: 'address.state', type: 'STRING', nullable: true }, { name: 'address.geo', type: 'GEOGRAPHY', nullable: true }] },
+      customers: { kind: 'bqTable', rows: 40, bytes: 4096, description: 'Customer master directory.', columns: [{ name: 'id', type: 'INT64', nullable: false }, { name: 'name', type: 'STRING', nullable: true }] },
+      daily: { kind: 'bqView', description: 'Daily order totals view.', columns: [{ name: 'day', type: 'DATE', nullable: true }, { name: 'total', type: 'NUMERIC', nullable: true }] }
     },
     staging: {}
   }
 }
 const bigQueryNamed = (names, name) => names.find(entry => entry === name) ?? names.find(entry => entry.toLowerCase() === name.toLowerCase())
-function bigQueryLookup(request) {
+const bigQueryTierProjects = [
+  { name: 'varia-fake', kind: 'bqProject', tier: 'billing' },
+  { name: 'dw-shared', kind: 'bqProject', tier: 'starred' },
+  { name: 'ml-features', kind: 'bqProject', tier: 'starred' },
+  { name: 'org-recent-mart', kind: 'bqProject', tier: 'discovered', recent: true },
+  { name: 'org-marketing-312', kind: 'bqProject', tier: 'discovered' },
+  { name: 'org-raw-09', kind: 'bqProject', tier: 'discovered', namesOnly: true, detail: 'names' }
+]
+const bigQueryTierJumpHits = [
+  { name: 'daily_revenue', kind: 'bqTable', tier: 'billing', project: 'varia-fake', dataset: 'finance' },
+  { name: 'daily_revenue_v2', kind: 'bqTable', tier: 'starred', project: 'dw-shared', dataset: 'gold' },
+  { name: 'daily_rev_mart', kind: 'bqTable', tier: 'discovered', recent: true, project: 'org-recent-mart', dataset: 'analytics' },
+  { name: 'daily_rev_raw', kind: 'bqTable', tier: 'discovered', namesOnly: true, project: 'org-raw-09', dataset: 'landing' }
+]
+function bigQueryLookup(request, tierMode = false) {
+  if (request.mode === 'jump') {
+    const query = (request.prefix ?? '').trim().toLowerCase()
+    const limit = Math.min(request.limit ?? 50, 50)
+    if (tierMode) {
+      const matched = bigQueryTierJumpHits.filter(item => item.name.toLowerCase().includes(query))
+      return { state: 'ready', path: [], items: matched.slice(0, limit), truncated: matched.length > limit }
+    }
+    const hits = []
+    for (const [project, datasets] of Object.entries(bigQueryIndex)) {
+      for (const [dataset, objects] of Object.entries(datasets)) {
+        for (const [name, entry] of Object.entries(objects)) {
+          if (name.toLowerCase().includes(query)) {
+            hits.push({ name, kind: entry.kind, tier: project === 'varia-fake' ? 'billing' : 'discovered', project, dataset })
+          }
+        }
+      }
+    }
+    return { state: 'ready', path: [], items: hits.slice(0, limit), truncated: hits.length > limit }
+  }
   const [projectName, datasetName, objectName] = request.path
   const keep = name => request.prefix === undefined || (request.exact ? name.toLowerCase() === request.prefix.toLowerCase() : name.toLowerCase().startsWith(request.prefix.toLowerCase()))
   const answer = (path, entries, object) => {
     const kept = entries.filter(entry => keep(entry.name)), limit = request.limit ?? 500
     return { state: 'ready', path, items: kept.slice(0, limit), truncated: kept.length > limit, ...object ? { object } : {} }
   }
-  if (projectName === undefined) return answer([], Object.keys(bigQueryIndex).map(name => ({ name, kind: 'bqProject' })))
+  if (projectName === undefined) return answer([], tierMode ? bigQueryTierProjects : Object.keys(bigQueryIndex).map((name, i) => ({ name, kind: 'bqProject', tier: i === 0 ? 'billing' : 'starred' })))
   const project = bigQueryNamed(Object.keys(bigQueryIndex), projectName)
   if (!project) return { state: 'absent', path: request.path, items: [], truncated: false }
-  if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset' })))
+  if (datasetName === undefined) return answer([project], Object.keys(bigQueryIndex[project]).sort().map(name => ({ name, kind: 'bqDataset', detail: 'US' })))
   const dataset = bigQueryNamed(Object.keys(bigQueryIndex[project]), datasetName)
   if (!dataset) return { state: 'absent', path: request.path, items: [], truncated: false }
   const objects = bigQueryIndex[project][dataset]
@@ -372,6 +407,54 @@ function bigQueryLookup(request) {
   if (!name) return { state: 'ready', path: [project, dataset], items: [], truncated: false }
   const { columns, kind, ...facts } = objects[name]
   return answer([project, dataset, name], columns.map(column => ({ ...column, kind: 'bqColumn' })), { name, kind, detailed: true, ...facts })
+}
+const sqlServerLookupTables = {
+  Orders: {
+    object: { name: 'Orders', kind: 'table', detailed: true },
+    items: [
+      { name: 'OrderId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+      { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+      { name: 'PlacedAt', kind: 'column', type: 'datetime2(7)', nullable: false },
+      { name: 'TotalAmount', kind: 'column', type: 'decimal(18,2)', nullable: true },
+      { name: 'PK_Orders', kind: 'key', subtype: 'primary', detail: '(OrderId)' },
+      { name: 'IX_Orders_CustomerId', kind: 'index', subtype: 'nonclustered', detail: '(CustomerId) INCLUDE (PlacedAt, TotalAmount)' },
+      { name: 'FK_Orders_Customers', kind: 'foreignKey', subtype: 'outgoing', detail: '(CustomerId) → dbo.Customers(Id)' },
+      { name: 'FK_OrderLines_Orders', kind: 'foreignKey', subtype: 'incoming', detail: 'dbo.OrderLines(OrderId) → (OrderId)' }
+    ]
+  },
+  CustomerAppData: {
+    object: { name: 'CustomerAppData', kind: 'table', detailed: true },
+    items: [
+      { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+      { name: 'AccountCode', kind: 'column', type: 'nvarchar(40)', nullable: false, detail: 'UK' },
+      { name: 'RegionId', kind: 'column', type: 'int', nullable: false, detail: 'FK' },
+      { name: 'CreatedAt', kind: 'column', type: 'datetime2(3)', nullable: false },
+      { name: 'PK_CustomerAppData', kind: 'key', subtype: 'primary', detail: '(CustomerId)' },
+      { name: 'UQ_CustomerAppData_AccountCode', kind: 'key', subtype: 'unique', detail: '(AccountCode)' },
+      { name: 'IX_CustomerAppData_RegionId', kind: 'index', subtype: 'nonclustered', detail: '(RegionId) INCLUDE (AccountCode)' },
+      { name: 'FK_CustomerAppData_Regions', kind: 'foreignKey', subtype: 'outgoing', detail: '(RegionId) → dbo.Regions(Id)' },
+      { name: 'FK_Orders_CustomerAppData', kind: 'foreignKey', subtype: 'incoming', detail: 'dbo.Orders(CustomerId) → (CustomerId)' }
+    ]
+  },
+  CustomerMaster: {
+    object: { name: 'CustomerMaster', kind: 'table', detailed: true },
+    items: [
+      { name: 'CustomerId', kind: 'column', type: 'int', nullable: false, detail: 'PK · IDENTITY' },
+      { name: 'DisplayName', kind: 'column', type: 'nvarchar(120)', nullable: false },
+      { name: 'PK_CustomerMaster', kind: 'key', subtype: 'primary', detail: '(CustomerId)' }
+    ]
+  }
+}
+function sqlServerLookup(request) {
+  const [database, schema, objectName] = request.path
+  if (!database) return { state: 'ready', path: [], items: [{ name: 'AppData', kind: 'database' }, { name: 'master', kind: 'database' }], truncated: false }
+  if (!schema) return { state: 'ready', path: [database], items: [{ name: 'dbo', kind: 'schema' }], truncated: false }
+  if (!objectName) return { state: 'ready', path: [database, schema], items: Object.keys(sqlServerLookupTables).map(name => ({ name, kind: 'table' })), truncated: false }
+  const resolvedSchema = schema === '*' ? 'dbo' : schema
+  const key = Object.keys(sqlServerLookupTables).find(name => name.toLowerCase() === objectName.toLowerCase())
+  if (!key || resolvedSchema.toLowerCase() !== 'dbo') return { state: 'ready', path: [database, resolvedSchema], items: [], truncated: false }
+  const entry = sqlServerLookupTables[key]
+  return { state: 'ready', path: [database, 'dbo', entry.object.name], items: entry.items, truncated: false, object: entry.object }
 }
 const databaseRows = async () => await controlled('spaced-databases') ? [...workbenchDatabases, ...spacedDatabases] : workbenchDatabases
 const serverRoles = ['##MS_DatabaseConnector##', '##MS_LoginManager##', 'bulkadmin', 'dbcreator', 'public', 'securityadmin', 'serveradmin', 'sysadmin']
@@ -438,6 +521,8 @@ const explorerRows = {
   // SQL Server Agent's Proxies (AG-8b): the Proxies folder (list agentProxies, as its folder is named) lists a folder per subsystem,
   // and each subsystem (whose kind lists agentProxies too) the proxies active to it; Security › Credentials.
   agentProxies: owner => owner.kind !== 'agentProxySubsystem' ? proxySubsystems.map(subsystem => explorerObject({ kind: 'agentProxySubsystem', name: subsystem.name }, subsystem.label, { hasChildren: true })) : fakeProxies.filter(proxy => proxy.subsystems.includes(proxySubsystems.find(subsystem => subsystem.name === owner.name)?.id)).map(proxy => explorerObject({ kind: 'agentProxy', name: proxy.name }, proxy.name)),
+  agentAlerts: () => agentAlertRows.map(alert => explorerObject({ kind: 'agentAlert', name: alert.name }, alert.name, { ...alert.enabled ? {} : { status: 'disabled' } })),
+  agentOperators: () => agentOperatorRows.map(operator => explorerObject({ kind: 'agentOperator', name: operator.name }, operator.name, { ...operator.enabled ? {} : { status: 'disabled' } })),
   credentials: () => fakeCredentials.map(credential => explorerObject({ kind: 'credential', name: credential.name }, credential.name)),
   // The Jobs folder in name order, with each job's id and a disabled job's status, as CatalogSql lists them (AG-12's chips).
   agentJobs: (_, listedEnabled = !!controlDirectory && existsSync(join(controlDirectory, 'agent-listed-enabled'))) => agentTreeJobs().sort((a, b) => a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
@@ -445,7 +530,7 @@ const explorerRows = {
     // live read can dim it.
     .map(job => explorerObject({ kind: 'agentJob', name: job.name }, job.name, { jobId: job.id.toUpperCase(), ...job.enabled || listedEnabled ? {} : { status: 'disabled' } }))
 }
-const agentListings = new Set(['agentProxies', 'credentials', 'agentJobs'])
+const agentListings = new Set(['agentProxies', 'agentAlerts', 'agentOperators', 'credentials', 'agentJobs'])
 // The control file agent-extra-job: a job created elsewhere (another session's sp_add_job), which only the Jobs folder lists.
 const agentExtraJob = { id: 'a1b2c3d4-0000-4000-8000-0000000000ee', name: 'Archive', enabled: true }
 const agentTreeJobs = () => [...agentJobs, ...controlDirectory && existsSync(join(controlDirectory, 'agent-extra-job')) ? [agentExtraJob] : []]
@@ -562,11 +647,21 @@ function memoryDetail(used) {
 const indexedConnections = new Set()
 let lastIndexBytes = -1
 let indexMemorySeq = 0
-function reportIndexMemory() {
+/** The saved index as main configured it (explorer.indexStore.configure): a store that saves holds 12 files of 3 MiB for
+ *  each indexed connection, until explorer.indexStore.clear. */
+let indexStore
+let indexStoreSaved = new Set()
+function indexStoreStatus() {
+  if (!indexStore) return undefined
+  const saves = indexStore.mode === 'encrypted' || indexStore.mode === 'clearText'
+  return { mode: indexStore.mode, files: saves ? 12 * indexStoreSaved.size : 0, bytes: saves ? 3 * 1024 * 1024 * indexStoreSaved.size : 0, limitBytes: indexStore.limitMiB * 1024 * 1024 }
+}
+function reportIndexMemory(force = false) {
   const usedBytes = indexedConnections.size * 16 * 1024 * 1024
-  if (lastIndexBytes === usedBytes) return
+  if (lastIndexBytes === usedBytes && !force) return
   lastIndexBytes = usedBytes
-  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq, detail: indexMemoryDetail(indexedConnections.size) })
+  const store = indexStoreStatus()
+  write(FrameKind.EVENT, 0, 0, { type: 'explorer.index.memory', usedBytes, globalBytes: 512 * 1024 * 1024, seq: ++indexMemorySeq, detail: indexMemoryDetail(indexedConnections.size), ...store ? { store } : {} })
 }
 /** What the index holds (IndexMemoryReport), per connection: 16 MiB of 2 records, 5 names and 9 definitions, its 1,200 packed
  *  definitions 42 MiB of text in 6 MiB of frames. */
@@ -1449,6 +1544,10 @@ const killedSessions = new Set()
 const agentSession = { sessionId: 72, status: 'running', login: 'NT SERVICE\\SQLSERVERAGENT', database: 'master', command: 'WAITFOR', application: 'SQLAgent - TSQL JobStep (Job 0xD4C3B2A1000000408000000000000001 : Step 2)',
   hostName: 'DB-01', job: 'Nightly, step 2 (Load)', jobName: 'Nightly', openTransactions: '0', loginTime: '2026-11-09 08:04:00.000', hostProcessId: '8500' }
 const agentSessionShown = () => !!controlDirectory && existsSync(join(controlDirectory, 'activity-agent-job'))
+/** The Agent session's run of Nightly: held (it never ends by itself) until Stop Job ends it, while activity-agent-job shows the session. */
+function holdAgentSessionRun() {
+  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00', held: true })
+}
 const allSessions = () => agentSessionShown() ? [...fakeSessions, agentSession] : fakeSessions
 const fakeSessionOf = id => allSessions().find(row => row.sessionId === id && !killedSessions.has(id))
 const sameLoginTime = (row, loginTime) => !!row.loginTime && row.loginTime.replace(' ', 'T') === String(loginTime).replace(/(\.\d{3})\d*$/, '$1')
@@ -1495,7 +1594,7 @@ function activityKill(params) {
 const sessionTextColumns = ['login', 'database', 'application', 'job', 'hostName', 'command', 'waitType', 'status']
 function sessionsShown(filter) {
   const view = filter.view ?? 'all'
-  if (agentSessionShown() && !agentRuns.has(agentJobs[0].id)) agentRuns.set(agentJobs[0].id, { samples: 0, started: '2026-11-09 08:04:00' })
+  holdAgentSessionRun()
   return allSessions().filter(row => !killedSessions.has(row.sessionId) && (filter.showSystem || !row.system) && (filter.showVaria || !row.pool) && (view === 'all'
     || (view === 'active' && row.command !== null) || (view === 'blocked' && row.blockedBy) || (view === 'blocking' && row.blocking)
     || (view === 'idleOpenTransaction' && row.command === null && row.openTransactions > 0) || (view === 'rollingBack' && false)))
@@ -1683,7 +1782,8 @@ function sendLive(live, value) {
   live.available -= body.length
   process.stdout.write(encodeFrame(FrameKind.EVENT, live.id, 0, body))
 }
-const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' || probe.probe === 'agent.treeProbe' ? 200 : live.args.tickMs ?? probe.intervalMs
+// agent-flow-runs moves a run a step per watched sample, so it samples every 2.5 s: long enough to see each step, short for CI.
+const periodOf = (live, probe) => probe.probe === 'ssis.catalogProbe' || probe.probe === 'agent.treeProbe' ? 200 : probe.probe === 'agent.jobs.watched' && flowRunsOn() ? 2500 : live.args.tickMs ?? probe.intervalMs
 function wakeLive(live) {
   clearTimeout(live.timer)
   if (!lives.has(live.id)) return
@@ -1868,25 +1968,33 @@ const agentOutcomes = { 0: 'Failed', 1: 'Succeeded', 3: 'Canceled' }
 const agentStamp = text => Number(text.replace(/\D/g, ''))
 const agentRunning = job => agentRuns.has(job.id)
 /** Each list or watched sample moves a started run on; after two it ends (Succeeded, or Canceled when stopped). */
-function agentAdvance() {
+function agentAdvance(probeName) {
   for (const [id, run] of agentRuns) {
+    // The Agent session's run (activity-agent-job) lasts until Stop Job ends it: its session row says the job runs, so Stop must find it.
+    if (run.held && !run.stopped) continue
+    // agent-flow-runs advances one step per watched sample, never on a background Job Activity Monitor's list probe.
+    if (run.flow) { if (probeName === 'agent.jobs.watched') flowAdvance(id, run); continue }
     if (run.samples++ < 2) continue
     Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
     agentRuns.delete(id)
   }
 }
 function agentJobsSample(live, probe) {
-  if (probe.probe === 'agent.jobs.service') return { status: [{ id: 'agentXps', value: 1 }, { id: 'serviceState', value: 4 }, { id: 'startupType', value: 2 }] }
-  agentAdvance()
+  if (probe.probe === 'agent.jobs.service') {
+    const [agentXps, serviceState, startupType, clustered = 0] = explorerStatus()?.agent ?? [1, 4, 2]
+    return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }, { id: 'clustered', value: clustered }] }
+  }
+  agentAdvance(probe.probe)
   if (probe.probe === 'agent.jobs.watched') {
     const metrics = liveProbes['agent.jobs.watched'].series.map(() => null)
     ;(live.args.watch ?? []).forEach((id, slot) => {
       const job = agentJobs.find(item => item.id === id.toLowerCase())
       const run = job && agentRuns.get(job.id)
-      if (job) metrics.splice(slot * 6, 6, run ? 1 : 4, run ? 1 : null, job.steps, run ? agentStamp(run.started) : null, job.outcome, agentStamp(job.lastRun))
+      if (job) metrics.splice(slot * 6, 6, run ? 1 : 4, run ? run.flow ? flowScript[run.flow.at][0] : 1 : null, agentJobSteps(job).length, run ? agentStamp(run.started) : null, job.outcome, agentStamp(job.lastRun))
     })
-    // The server's clock, on the same clock as a run's start.
-    metrics[metrics.length - 1] = agentStamp(new Date().toISOString().slice(0, 19).replace('T', ' '))
+    // The server's clock, on the same clock as a run's start; a flow run's own clock while one runs.
+    const flowRun = [...agentRuns.values()].find(run => run.flow)
+    metrics[metrics.length - 1] = agentStamp(flowRun ? flowClock(flowRun.flow.now) : new Date().toISOString().slice(0, 19).replace('T', ' '))
     return { metrics }
   }
   const tone = job => agentRunning(job) ? 'running' : job.outcome === 0 ? 'error' : job.enabled ? null : 'muted'
@@ -1946,7 +2054,10 @@ function agentOperatorDocument(params) {
   const operator = params.target.kind === 'agent' ? undefined : agentOperatorRows.find(row => row.name === params.target.name)
   return { agentOperatorDocument: { ...agentObjectsBase(), alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [], ...operator ? { operator } : {} }, elapsedMs: 1 }
 }
-const agentOperatorsGrid = () => ({ agentOperators: { ...agentObjectsBase(), operators: agentOperatorRows, alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: [] }, elapsedMs: 1 })
+const agentOperatorJobs = () => controlDirectory && existsSync(join(controlDirectory, 'agent-operator-jobs'))
+  ? agentJobs.slice(0, 2).map(job => ({ id: job.id, name: job.name, email: agentJobDoc(job).emailOperator, page: '', netSend: '' }))
+  : []
+const agentOperatorsGrid = () => ({ agentOperators: { ...agentObjectsBase(), operators: agentOperatorRows, alerts: agentAlertRows.map(alertRow), notifications: agentNotifications, jobs: agentOperatorJobs() }, elapsedMs: 1 })
 function agentObjectSave(params) {
   if (params.action === 'agentAlert') {
     const save = params.agentAlert
@@ -1969,6 +2080,7 @@ const agentStepContent = (id, name) => ({ id, name, subsystem: 'TSQL', command: 
   server: '', databaseName: 'master', databaseUserName: '', retryAttempts: 0, retryInterval: 0, osRunPriority: 0, outputFileName: '', proxyId: 0 })
 const agentStepLists = new Map()
 function agentJobSteps(job) {
+  flowRunsSetup()
   if (!agentStepLists.has(job.id)) agentStepLists.set(job.id, { start: 1, steps: Array.from({ length: job.steps }, (_, index) => agentStepContent(index + 1, ['Check integrity', 'Rebuild indexes', 'Update statistics'][index] ?? `Step ${index + 1}`)) })
   return agentStepLists.get(job.id).steps
 }
@@ -2165,26 +2277,33 @@ const agentHistory = [
 const historyOutcomeIds = { 0: 'failed', 1: 'succeeded', 2: 'retry', 3: 'canceled' }
 const historyTones = { 0: 'error', 2: 'warning', 3: 'muted' }
 function agentHistorySample(live, probe) {
+  flowRunsSetup()
   const args = live.args ?? {}
   const checked = args.jobs?.map(id => id.toLowerCase())
   const named = run => checked === undefined || checked.includes(run.job)
   const text = args.text?.toLowerCase()
-  const kept = agentHistory.filter(run => named(run) && (!args.outcome || historyOutcomeIds[run.outcome] === args.outcome)
+  // An in-progress run is listed once a step row is written, keyed by its first step row as AgentHistoryRun.Key keys it.
+  const runKey = run => run.inProgress ? Math.min(...run.steps.map(step => step.instance)) : run.instance
+  const kept = agentHistory.filter(run => named(run) && (!run.inProgress || run.steps.length) && (!args.outcome || historyOutcomeIds[run.outcome] === args.outcome)
     && (!text || [run.message, ...run.steps.map(step => step.message)].some(message => message.toLowerCase().includes(text)))
     && (args.step === undefined || args.step === 0 || run.steps.some(step => step.id === args.step)))
     // Newest first, as AgentHistoryReader orders them.
     .sort((a, b) => b.date.localeCompare(a.date) || b.instance - a.instance)
   const jobName = id => agentJobs.find(job => job.id === id)?.name ?? id
-  const key = run => `${run.job}:${run.instance}`
-  const runs = storeResult({ columns: historyColumns(0), rows: kept.map(run => [run.date, jobName(run.job), agentOutcomes[run.outcome], '00:00:02', String(run.steps.length), run.message, key(run), run.job.toUpperCase(), historyTones[run.outcome] ?? null]) }, 0)
-  const selected = args.run && agentHistory.find(run => run.job === args.run.job.toLowerCase() && run.instance === args.run.instance && named(run))
-  const stepRow = (step, run) => [String(step.id), step.name, agentOutcomes[step.outcome], run.date, '00:00:01', '0', '0', '0', step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
-  const steps = storeResult({ columns: historyColumns(1), rows: selected ? [stepRow({ id: 0, name: '(Job outcome)', outcome: selected.outcome, message: selected.message, instance: selected.instance }, selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
+  const key = run => `${run.job}:${runKey(run)}`
+  const runs = storeResult({ columns: historyColumns(0), rows: kept.map(run => [run.date, jobName(run.job), run.inProgress ? 'In progress' : agentOutcomes[run.outcome], run.inProgress ? null : run.duration ?? '00:00:02', String(run.steps.length), run.message, key(run), run.job.toUpperCase(), run.inProgress ? 'running' : historyTones[run.outcome] ?? null]) }, 0)
+  const selected = args.run && agentHistory.find(run => run.job === args.run.job.toLowerCase() && (!run.inProgress || run.steps.length) && runKey(run) === args.run.instance && named(run))
+  const stepRow = (step, run) => [String(step.id), step.name, step.outcome === 2 ? 'Retry' : agentOutcomes[step.outcome], step.started ?? run.date, step.seconds !== undefined ? flowDuration(step.seconds) : '00:00:01', '0', '0', String(step.retries ?? 0), step.message, String(step.instance), run.job.toUpperCase(), historyTones[step.outcome] ?? null]
+  const outcomeRow = run => run.inProgress ? [] : [stepRow({ id: 0, name: '(Job outcome)', outcome: run.outcome, message: run.message, instance: run.instance, ...run.seconds !== undefined ? { seconds: run.seconds } : {} }, run)]
+  const steps = storeResult({ columns: historyColumns(1), rows: selected ? [...outcomeRow(selected), ...selected.steps.map(step => stepRow(step, selected))] : [] }, 0)
   const jobs = storeResult({ columns: historyColumns(2), rows: [...agentJobs].sort((a, b) => a.name.localeCompare(b.name)).map(job => [job.id.toUpperCase(), job.name, 'sa', agentRunning(job) ? 'Yes' : 'No', job.enabled ? 'Yes' : 'No']) }, 0)
   // The job document's History (AG-6d) asks for one job's usual durations: every run here takes 2 s and each step 1 s.
-  const succeeded = args.usual ? agentHistory.filter(run => named(run) && run.outcome === 1) : []
+  // A flow-runs step that has its own seconds usually takes those.
+  const succeeded = args.usual ? agentHistory.filter(run => named(run) && run.outcome === 1 && !run.inProgress) : []
   const usualSteps = [...new Set(succeeded.flatMap(run => run.steps.map(step => step.id)))].sort((a, b) => a - b)
-  const usual = storeResult({ columns: historyColumns(3), rows: succeeded.length ? [['0', '2', String(succeeded.length)], ...usualSteps.map(id => [String(id), '1', String(succeeded.length)])] : [] }, 0)
+  const usualOf = id => succeeded.flatMap(run => run.steps).find(step => step.id === id && step.seconds !== undefined)?.seconds ?? 1
+  const usualJob = succeeded[0]?.seconds ?? 2
+  const usual = storeResult({ columns: historyColumns(3), rows: succeeded.length ? [['0', String(usualJob), String(succeeded.length)], ...usualSteps.map(id => [String(id), String(usualOf(id)), String(succeeded.length)])] : [] }, 0)
   // Each table keeps its last two revisions and retires its own older ones, as the backend does.
   live.revisions.push(runs.resultId, steps.resultId, jobs.resultId, usual.resultId)
   live.historyRevisions ??= [[], [], [], []]
@@ -2200,6 +2319,68 @@ function agentHistorySample(live, probe) {
   return {
     status: [{ id: 'historyMaxRows', value: 1000 }, { id: 'historyMaxRowsPerJob', value: 100 }],
     tables: [runs, steps, jobs, usual].map((result, table) => ({ table, descriptor: describe(result), revision: n, ...(retiredOf[table].length ? { retired: retiredOf[table] } : {}), ...(table === 0 && tracked ? { tracked } : {}) }))
+  }
+}
+// Steps › Flow's run overlays (scripts/agent-flow-run-smoke.mjs): while the control file agent-flow-runs exists, Nightly has four steps
+// whose actions branch (1 ✓ next ✗ quit failure; 2 ✓ next ✗ go to 1; 3 ✓ quit success ✗ go to 4; 4 quits reporting failure), its newest
+// run failed after a loop (1 retried then ✓, 2 ✗, 1 ✓, 2 ✓, 3 ✗, 4 ✓) and an older one succeeded. Start Job runs flowScript, a step a
+// watched sample (every 2.5 s, periodOf), on a clock of its own (each step's seconds, the current one 4 s in) so a recording shows real-looking times quickly;
+// History lists the run In progress with the rows of its finished steps, and the run lands as Succeeded when the last step ends.
+const flowRunsOn = () => !!controlDirectory && existsSync(join(controlDirectory, 'agent-flow-runs'))
+let flowRunsReady = false
+const flowStepNames = ['Check integrity', 'Rebuild indexes', 'Update statistics', 'Notify operators']
+const flowScript = [[1, 1, 13], [2, 0, 9], [1, 1, 12], [2, 1, 31], [3, 1, 6]]
+const flowDuration = seconds => [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(part => String(part).padStart(2, '0')).join(':')
+const flowClock = seconds => new Date(seconds * 1000).toISOString().slice(0, 19).replace('T', ' ')
+const flowSeconds = text => Date.parse(text.replace(' ', 'T') + 'Z') / 1000
+let flowInstance = 100
+function flowRunsSetup() {
+  if (flowRunsReady || !flowRunsOn()) return
+  flowRunsReady = true
+  const nightly = agentJobs[0]
+  const action = (onSuccessAction, onSuccessStepId, onFailAction, onFailStepId) => ({ onSuccessAction, onSuccessStepId, onFailAction, onFailStepId })
+  const actions = [action(3, 0, 2, 0), action(3, 0, 4, 1), action(1, 0, 4, 4), action(2, 0, 2, 0)]
+  agentStepLists.set(nightly.id, { start: 1, steps: flowStepNames.map((name, at) => ({ ...agentStepContent(at + 1, name), ...actions[at], ...at === 0 ? { retryAttempts: 2, retryInterval: 1 } : {} })) })
+  nightly.steps = flowStepNames.length
+  const run = (instance, outcome, date, rows, message) => {
+    let at = flowSeconds(date)
+    const steps = rows.map(([id, stepOutcome, seconds, retries = 0], index) => {
+      const started = flowClock(at)
+      at += seconds
+      return { instance: instance - rows.length + index, id, name: flowStepNames[id - 1], outcome: stepOutcome, started, seconds, retries,
+        message: stepOutcome === 0 ? `Executed as user: sa. ${flowStepNames[id - 1]} failed: Lock request time out period exceeded. [SQLSTATE 42000] (Error 1222). The step failed.` : stepOutcome === 2 ? 'Executed as user: sa. Deadlock victim. The step will be retried.' : 'Executed as user: sa. The step succeeded.' }
+    })
+    return { job: nightly.id, instance, outcome, date, duration: flowDuration(at - flowSeconds(date)), seconds: at - flowSeconds(date), message, steps }
+  }
+  for (let at = agentHistory.length - 1; at >= 0; at--) if (agentHistory[at].job === nightly.id) agentHistory.splice(at, 1)
+  agentHistory.unshift(
+    run(60, 0, '2026-11-15 02:30:00', [[1, 2, 4], [1, 1, 11, 1], [2, 0, 20], [1, 1, 12], [2, 1, 33], [3, 0, 3], [4, 1, 1]],
+      'The job failed.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 4 (Notify operators).'),
+    run(40, 1, '2026-11-14 02:30:00', [[1, 1, 12], [2, 1, 30], [3, 1, 6]], 'The job succeeded.  The Job was invoked by Schedule 1 (Nightly).  The last step to run was step 3 (Update statistics).')
+  )
+  Object.assign(nightly, { outcome: 0, lastRun: '2026-11-15 02:30:00' })
+}
+function flowStart(job, run) {
+  const instance = flowInstance += 20
+  const begun = flowSeconds(run.started)
+  run.flow = { at: 0, stepStart: begun, now: begun + 4 }
+  run.history = { job: job.id, instance, outcome: 1, date: run.started, inProgress: true, message: 'The job is running.  The Job was invoked by User sa.', steps: [] }
+  agentHistory.unshift(run.history)
+}
+function flowAdvance(id, run) {
+  if (run.samples++ === 0) return
+  const flow = run.flow, [stepId, outcome, seconds] = flowScript[flow.at]
+  run.history.steps.push({ instance: run.history.instance - 19 + run.history.steps.length, id: stepId, name: flowStepNames[stepId - 1], outcome, started: flowClock(flow.stepStart), seconds,
+    message: outcome === 0 ? `Executed as user: sa. ${flowStepNames[stepId - 1]} failed: Lock request time out period exceeded. The step failed.` : 'Executed as user: sa. The step succeeded.' })
+  flow.stepStart += seconds
+  flow.at++
+  flow.now = flow.stepStart + 4
+  if (run.stopped || flow.at >= flowScript.length) {
+    const total = flow.stepStart - flowSeconds(run.started)
+    Object.assign(run.history, { inProgress: false, outcome: run.stopped ? 3 : 1, duration: flowDuration(total), seconds: total,
+      message: run.stopped ? 'The job was stopped prior to completion by User sa.' : `The job succeeded.  The Job was invoked by User sa.  The last step to run was step 3 (Update statistics).` })
+    Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
+    agentRuns.delete(id)
   }
 }
 function agentHistoryMessage(params) {
@@ -2279,8 +2460,11 @@ function agentJobVerb(params) {
   if (params.action === 'startJob') {
     if (agentRunning(job)) return refused('JOB_STATE', `${job.name} is already running.`)
     agentRuns.set(job.id, { samples: 0, started: new Date().toISOString().slice(0, 19).replace('T', ' ') })
+    if (flowRunsOn() && job.id === agentJobs[0].id) flowStart(job, agentRuns.get(job.id))
   }
   if (params.action === 'stopJob') {
+    // While Agent's session for Nightly shows, Nightly runs, whichever probe sampled first.
+    if (job.id === agentJobs[0].id) holdAgentSessionRun()
     const run = agentRuns.get(job.id)
     if (!run) return refused('JOB_STATE', `${job.name} is not running.`)
     Object.assign(run, { stopped: true, samples: 2 })
@@ -2419,8 +2603,51 @@ async function workbench(id, method, params, credit) {
     case 'system.health': return respond(id, { protocolVersion: 2, runtime: 'fake', platform: process.platform, smoVersion: 'fake', sqlClientVersion: 'fake' })
     case 'bigquery.account': return respond(id, { kind: 'emulator', account: 'Anonymous (emulator)' })
     case 'language.lookup': {
-      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.lookup needs a BigQuery connection.')
-      return respond(id, { index: 'ready', answers: params.requests.map(bigQueryLookup) })
+      const conn = workbenchConnections.get(params.connectionId)
+      if (!conn) return fail(id, 'NOT_CONNECTED', 'The connection is no longer active.')
+      if (conn.bigQuery) {
+        const tierMode = await controlled('bq-tiers')
+        return respond(id, { index: 'ready', answers: params.requests.map(request => bigQueryLookup(request, tierMode)) })
+      }
+      return respond(id, { index: 'ready', answers: params.requests.map(sqlServerLookup) })
+    }
+    case 'language.hydrate': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'language.hydrate needs a BigQuery connection.')
+      const outcomes = params.targets.map(target => {
+        const project = bigQueryNamed(Object.keys(bigQueryIndex), target.project)
+        const dataset = project ? bigQueryNamed(Object.keys(bigQueryIndex[project]), target.dataset) : undefined
+        const name = dataset ? bigQueryNamed(Object.keys(bigQueryIndex[project][dataset]), target.name) : undefined
+        if (name) return { project, dataset, name, status: 'cached' }
+        if (!project && !target.allowExternal) return { project: target.project, dataset: target.dataset, name: target.name, status: 'external' }
+        return { project: target.project, dataset: target.dataset, name: target.name, status: 'notFound', code: 'NOT_FOUND' }
+      })
+      return respond(id, { outcomes })
+    }
+    case 'bigquery.properties': {
+      if (!workbenchConnections.get(params.connectionId)?.bigQuery) return fail(id, 'UNSUPPORTED_PROVIDER', 'bigquery.properties needs a BigQuery connection.')
+      const obj = bigQueryIndex[params.project]?.[params.dataset]?.[params.name]
+      if (!obj) return fail(id, 'NOT_FOUND', `Not found: ${params.project}.${params.dataset}.${params.name}`)
+      const columns = obj.columns.map(col => ({ name: col.name, type: col.type }))
+      const topFields = obj.columns.filter(col => !col.name.includes('.')).map(col => {
+        const nested = obj.columns.filter(c => c.name.startsWith(col.name + '.')).map(c => ({ name: c.name.slice(col.name.length + 1), type: c.type, mode: c.nullable === false ? 'REQUIRED' : 'NULLABLE' }))
+        return { name: col.name, type: col.type, mode: col.nullable === false ? 'REQUIRED' : 'NULLABLE', ...nested.length ? { fields: nested } : {} }
+      })
+      return respond(id, {
+        name: params.name,
+        type: obj.kind === 'bqView' ? 'View' : 'Table',
+        fullName: `${params.project}.${params.dataset}.${params.name}`,
+        location: 'US',
+        description: obj.description,
+        elapsedMs: 12,
+        groups: [
+          { title: 'Table', facts: [{ label: 'Location', value: 'US' }, ...obj.partitioning ? [{ label: 'Partitioned by', value: obj.partitioning }] : [], ...obj.clustering ? [{ label: 'Clustered by', value: obj.clustering }] : []] },
+          { title: 'Storage', facts: [...obj.rows !== undefined ? [{ label: 'Rows', value: obj.rows.toLocaleString('en-US') }] : [], ...obj.bytes !== undefined ? [{ label: 'Logical size', value: '5.0 MiB' }] : []] }
+        ],
+        storage: { ...obj.rows !== undefined ? { rows: obj.rows } : {}, ...obj.bytes !== undefined ? { logicalBytes: obj.bytes } : {} },
+        layout: { ...obj.partitioning ? { partitioning: obj.partitioning } : {}, ...obj.clustering ? { clustering: obj.clustering.split(',').map(s => s.trim()) } : {} },
+        columns,
+        schema: topFields
+      })
     }
     case 'language.status': {
       if (await controlled('language-status-fail')) return fail(id, 'BACKEND_UNAVAILABLE', 'SQL language provider availability check failed.')
@@ -2521,6 +2748,19 @@ async function workbench(id, method, params, credit) {
       return respond(id, await databaseRows())
     case 'connections.discover': return respond(id, { servers: [] })
     case 'entra.cache.clear': return respond(id, { cleared: true })
+    case 'explorer.indexStore.configure': {
+      indexStore = { mode: params.mode, limitMiB: params.limitMiB }
+      const status = indexStoreStatus()
+      reportIndexMemory(true)
+      return respond(id, status)
+    }
+    case 'explorer.indexStore.clear': {
+      const before = indexStoreStatus() ?? { files: 0, bytes: 0 }
+      // What is indexed now is saved again only by its next build.
+      indexStoreSaved = new Set()
+      reportIndexMemory(true)
+      return respond(id, { files: before.files, bytes: before.bytes, kept: 0 })
+    }
     case 'results.setMemoryLimit': return respond(id, { applied: false, globalBytes: 256 * 1024 * 1024, queryBytes: 128 * 1024 * 1024 })
     case 'live.subscribe': return liveSubscribe(id, credit, params)
     case 'live.update': return liveUpdate(id, params)
@@ -2773,6 +3013,18 @@ async function workbench(id, method, params, credit) {
         case 'agentSchedules': return respond(id, agentSchedulesDescribe(params))
         case 'agentProxy': return respond(id, agentProxyDocument(params))
         case 'credential': return respond(id, credentialDocument(params))
+        case 'agentProperties': return respond(id, {
+          agentProperties: {
+            settings: { sqlserverRestart: true, monitorAutostart: true, historyMaxRows: 1000, historyMaxRowsPerJob: 100, autoStart: true, startupAccount: 'NT Service\\SQLSERVERAGENT', errorLogFile: 'D:\\MSSQL\\Log\\SQLAGENT.OUT', errorLoggingLevel: 3 },
+            serverNow: '2026-11-26T14:30:00', serverOffsetMinutes: 0,
+            history: {
+              total: 984, recent: 700, jobsTruncated: false,
+              jobs: [{ name: 'Backup', rows: 600, recent: 672 }, { name: 'Nightly', rows: 360, recent: 28 }, { name: 'Purge', rows: 24, recent: 0 }],
+              ages: [{ days: 0, rows: 120 }, { days: 3, rows: 350 }, { days: 30, rows: 400 }, { days: 90, rows: 114 }]
+            }
+          },
+          elapsedMs: 1
+        })
         case 'tableDesigner': return respond(id, { tableDesigner: { database: params.target.name, band: 16, schemas: ['dbo', 'sales'], schemasTruncated: false, defaultSchema: 'dbo', defaultFilegroup: 'PRIMARY', canCreate: true }, elapsedMs: 1 })
         case 'tableProperties': return respond(id, {
           tableProperties: {
@@ -2808,6 +3060,7 @@ GO
         // The proxy and Credential documents' scripts write <secret>; the request never carries one.
         case 'agentProxy': return respond(id, { text: `USE [msdb]\nGO\nEXEC msdb.dbo.sp_${params.target.kind === 'agent' ? 'add' : 'update'}_proxy @proxy_name=N'${params.agentProxy.name ?? params.target.name}'\nGO\n`, database: 'msdb', warnings: [] })
         case 'credential': return respond(id, { text: `USE [master]\nGO\n${params.target.kind === 'server' ? 'CREATE' : 'ALTER'} CREDENTIAL [${params.credential.name ?? params.target.name}] WITH IDENTITY = N'${params.credential.identity}', SECRET = <secret>\nGO\n`, database: 'master', warnings: [] })
+        case 'agentProperties': return respond(id, { text: "USE [msdb]\nGO\nEXEC msdb.dbo.sp_set_sqlagent_properties @monitor_autostart = 1\nGO\n", database: 'msdb', warnings: [] })
         case 'properties': return respond(id, { text: `USE [master]\r\nGO\r\nALTER DATABASE [${params.target.name}] SET RECOVERY SIMPLE WITH NO_WAIT\r\nGO\r\n`, database: 'master', warnings: [] })
         default: return respond(id, { text: 'DROP TABLE [dbo].[Orders]', database: params.target.database ?? 'master', warnings: [] })
       }
@@ -2818,6 +3071,7 @@ GO
       if (params.action === 'agentSchedule') return respond(id, agentScheduleSave(params))
       if (params.action === 'agentProxy') return respond(id, agentProxySave(params))
       if (params.action === 'credential') return respond(id, credentialSave(params))
+      if (params.action === 'agentProperties') return respond(id, { steps: [{ status: 'done', title: params.agentPurge ? 'Delete old job history' : 'Save SQL Server Agent properties' }], messages: params.agentPurge ? ['400 history entries purged.'] : [], elapsedMs: 1 })
       if (params.target?.kind === 'agentJob') return respond(id, agentJobVerb(params))
       if (params.action === 'deleteJobHistory') return respond(id, agentDeleteHistory(params))
       if (params.action === 'recycleAgentErrorLog') return respond(id, agentRecycleErrorLog())
@@ -2834,6 +3088,7 @@ GO
       event({ type: 'explorer.index.progress', done: 0, total: 1, objects: 0 })
       event({ type: 'explorer.index.progress', done: 1, total: 1, objects: searchObjects.length })
       indexedConnections.add(params.connectionId)
+      indexStoreSaved.add(params.connectionId)
       reportIndexMemory()
       return respond(id, { status: indexStatus(params.definitions !== false), elapsedMs: 2 })
     }

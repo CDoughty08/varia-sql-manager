@@ -175,7 +175,7 @@ internal sealed partial class SqlService
     private async Task<BigQueryDryRunResult> RemoteDryRunAsync(BigQueryDryRunArgs args, CancellationToken token)
     {
         var remote = args.Remote!;
-        if (args.Sql is not null || args.Dataset is not null || args.SessionId is not null) throw new RequestException("INVALID_PARAMS", "A dry run takes query text or a remote query, not both.");
+        if (args.Sql is not null || args.Dataset is not null || args.NoDefaultDataset || args.SessionId is not null) throw new RequestException("INVALID_PARAMS", "A dry run takes query text or a remote query, not both.");
         var connection = bigQuery.Find(args.ConnectionId) ?? throw new RequestException("NOT_CONNECTED", "The connection is no longer open.");
         var set = store.Find(remote.ResultId) ?? throw Unavailable(remote.ResultId);
         if (set.Remote is not { Source: BigQueryWindow window }) throw NotWindowed();
@@ -197,7 +197,7 @@ internal sealed partial class SqlService
         {
             plan = PlanRemote(remote.ResultId, remote.Kind, remote.Sort, remote.Filters, remote.Column, remote.Kept, true, estimate: true);
             sql = plan.Sql;
-            dataset = window.Args.Dataset ?? connection.Options.Dataset;
+            dataset = window.Args.NoDefaultDataset ? null : window.Args.Dataset ?? connection.Options.Dataset;
         }
         BigQueryEstimate estimate;
         try { estimate = await bigQuery.EstimateAsync(connection, sql, token, dataset, plan.Parameters, window.Location); }
@@ -268,7 +268,7 @@ internal sealed partial class SqlService
         var project = window.Project;
         var jobId = BigQueryService.NewJobId();
         var location = window.Location;
-        var dataset = plan.Fallback ? window.Args.Dataset ?? connection.Options.Dataset : plan.Dataset;
+        var dataset = plan.Fallback ? (window.Args.NoDefaultDataset ? null : window.Args.Dataset ?? connection.Options.Dataset) : plan.Dataset;
         var cap = connection.Options.MaximumBytesBilled ?? window.Args.MaximumBytesBilled;
         var prices = window.Args.Prices != false;
         var sent = false;
@@ -317,7 +317,7 @@ internal sealed partial class SqlService
                 {
                     var (statement, from, session) = await StatementAsync(plan, token);
                     // The window it opens keeps them, so its own rerun starts from what ran.
-                    queryArgs = queryArgs with { Sql = statement, Dataset = from };
+                    queryArgs = queryArgs with { Sql = statement, Dataset = from, NoDefaultDataset = from is null };
                     dataset = from;
                     if (session) messages.Add(RerunOutsideSession);
                 }
@@ -377,7 +377,8 @@ internal sealed partial class SqlService
                     var columns = BigQueryColumnPlan.From(page.Schema) ?? throw new RequestException("BACKEND_ERROR", "BigQuery answered the query without columns.");
                     var total = page.TotalRows ?? 0;
                     derived = store.Open(set.Budget, set.Index, set.BatchNumber, set.Iteration, "rows", columns.Columns, columns.Wires,
-                        lengths: columns.Lengths, derived: true, targetKey: set.TargetKey, targetLabel: set.TargetLabel,
+                        lengths: columns.Lengths, derived: true, name: kind == "rerun" ? set.ResultName : null,
+                        targetKey: set.TargetKey, targetLabel: set.TargetLabel,
                         targetEnvironment: set.TargetEnvironment, targetProvider: set.TargetProvider, statementSlot: set.StatementSlot)
                         ?? throw TooLarge(distinct ? "There is not enough result memory for this column's values. Close other results and try again."
                             : sample ? SampleRoom : "There is not enough result memory for this view. Close other results and try again.");

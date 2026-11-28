@@ -61,12 +61,34 @@ export const objectExplorerSettings = [
   {
     key: 'objectExplorer.search.indexOnConnect', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index objects when a server connects', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'objects', 'find', 'definitions'],
-    description: 'Reads the names of every object Object Explorer lists that you may see, from logins and databases down to columns and parameters, two databases at a time on a session of their own, so Search Objects finds them whether or not Object Explorer has loaded them. The index stays in memory and is dropped when the server disconnects. While it is False, a server is indexed only when you ask: Build index in Search Objects, or Rebuild Search Index.'
+    description: 'Reads the names of every object Object Explorer lists that you may see, from logins and databases down to columns and parameters, two databases at a time on a session of their own, so Search Objects finds them whether or not Object Explorer has loaded them. The index is held in memory and dropped when the server disconnects (Save index between sessions keeps a copy on disk). While it is False, a server is indexed only when you ask: Build index in Search Objects, or Rebuild Search Index.'
   },
   {
     key: 'objectExplorer.search.definitions', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index module definitions', type: 'boolean', default: true, varia: true,
     keywords: ['search', 'index', 'definitions', 'procedures', 'text'],
-    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index’s 512 MiB). Applies to the next build.'
+    description: 'Also keeps the text of procedures, functions, views and triggers you may VIEW DEFINITION of, so Search Objects can find text inside them (up to 1,000,000 characters of each, within the index memory limit). Applies to the next build.'
+  },
+  {
+    key: 'objectExplorer.search.memoryLimitMiB', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index memory limit',
+    type: 'integer', min: objectSearchLimits.memoryMiB.min, max: objectSearchLimits.memoryMiB.max, default: objectSearchLimits.memoryMiB.default, unit: 'MiB', varia: true,
+    keywords: ['search', 'index', 'memory', 'limit', 'definitions', 'bigquery', 'ram'],
+    description: 'The most memory the Search Objects indexes of all connections hold together. Definitions stop being kept once less than a quarter of it is free, and BigQuery indexes take at most five eighths of it between them (less what SQL Server holds), so SQL Server’s definitions keep their room; Search Objects says when anything was left out for memory. Applies to the next build. Lowering it drops nothing an index already holds: disconnect the server to give its memory back.'
+  },
+  {
+    key: 'objectExplorer.search.saveIndex', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Save index between sessions', type: 'boolean', default: true, varia: true,
+    keywords: ['search', 'index', 'save', 'disk', 'cache', 'persist', 'restart', 'encrypted'],
+    description: 'Saves each part of a Search Objects index (a database, a server’s own objects, a BigQuery dataset) to your Varia profile as soon as it has been read, encrypted under a key kept in the operating system’s key store, so the index does not have to be read from the server again after a restart. While it is False nothing is saved, and the indexes already saved are deleted. Clear Saved Search Indexes deletes them at any time.'
+  },
+  {
+    key: 'objectExplorer.search.diskLimitMiB', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Saved index disk limit',
+    type: 'integer', min: objectSearchLimits.store.diskMiB.min, max: objectSearchLimits.store.diskMiB.max, default: objectSearchLimits.store.diskMiB.default, unit: 'MiB', varia: true,
+    enabledBy: 'objectExplorer.search.saveIndex', keywords: ['search', 'index', 'save', 'disk', 'limit', 'space', 'cache'],
+    description: 'The most disk space the saved Search Objects indexes take. Past it, the indexes used least recently are deleted first; one not used for 30 days is deleted whatever the space. Lowering the limit deletes down to it at once.'
+  },
+  {
+    key: 'objectExplorer.search.saveUnencrypted', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Save index unencrypted when there is no key store', type: 'boolean', default: false, varia: true,
+    enabledBy: 'objectExplorer.search.saveIndex', keywords: ['search', 'index', 'save', 'unencrypted', 'plaintext', 'keyring', 'keychain', 'linux'],
+    description: 'Only matters on a system with no key store to hold the index’s key (for example Linux without GNOME Keyring or KWallet), where nothing is saved by default. True saves the index there unencrypted: the names of your servers’ objects and the text of their procedures, functions and views are then readable by any program or person that can read your files. Passwords and connection details are never part of the index. False deletes an index saved that way.'
   },
   {
     key: 'objectExplorer.search.bigQueryAccessibleProjects', page: 'objectExplorer.commands', group: 'Search Objects', label: 'Index all accessible BigQuery projects', type: 'boolean', default: true, varia: true,

@@ -1,5 +1,5 @@
 import { electron, expect } from './fixtures/smoke.mjs'
-import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve, join } from 'node:path'
 import { userInfo } from 'node:os'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -870,7 +870,7 @@ async function bigQueryFixtures(endpoint) {
  * and its columns with their descriptions, and offers its billed CREATE statement only on a button; a view shows its text; a
  * result's New Query opens a GoogleSQL tab on the connection, in the result's dataset.
  */
-async function bigQuerySearchDetails() {
+async function bigQuerySearchDetails(userData) {
   await page.keyboard.press('F1')
   await page.keyboard.type('search objects')
   await quickInput(page).getByRole('option', { name: /^Object Explorer: Search Objects…/ }).click()
@@ -907,6 +907,23 @@ async function bigQuerySearchDetails() {
   await expect(queryServer(page)).toContainText('varia-emulator')
   await expect(page.getByLabel('Query dataset', { exact: true })).toHaveValue('varia_fixture')
   console.log('BigQuery Search Objects checks passed against the emulator: the details pane\'s facts, columns and view text, the billed CREATE only on a button, and New Query.')
+  // The saved index: the emulator connection's datasets were saved to the profile's own folder, encrypted, with no dataset's,
+  // table's or column's name in a file's name or content.
+  const storeFolder = join(userData, 'SearchIndex')
+  const storeFiles = async () => (await readdir(storeFolder).catch(() => [])).filter(file => !file.startsWith('.'))
+  let seen = -1
+  await expect.poll(async () => { const count = (await storeFiles()).length, settled = count > 0 && count === seen; seen = count; return settled }, { timeout: 60000, intervals: [1000] }).toBe(true)
+  const savedFiles = await storeFiles()
+  expect(savedFiles.every(file => /^[0-9a-f]{32}-[0-9a-f]{32}\.vidx$/.test(file)), savedFiles.join(' ')).toBe(true)
+  for (const file of savedFiles) {
+    const content = await readFile(join(storeFolder, file))
+    expect(content[10]).toBe(1)
+    for (const text of ['varia_fixture', 'search_orders', 'search_orders_daily', 'varia-emulator', 'customer', 'Who placed the order.']) {
+      expect(file.includes(text), `${text} in a file name`).toBe(false)
+      expect(content.includes(Buffer.from(text, 'utf8')) || content.includes(Buffer.from(text, 'utf16le')), `${text} in ${file}`).toBe(false)
+    }
+  }
+  console.log(`BigQuery Search Objects checks passed: the emulator connection's index was saved as ${savedFiles.length} encrypted files with no name in them.`)
 }
 
 /**
@@ -1689,7 +1706,8 @@ async function bigQueryEmulator() {
   const endpoint = process.env.VARIA_TEST_BIGQUERY_ENDPOINT
   if (!endpoint) { console.log('BigQuery Connect dialog checks skipped: VARIA_TEST_BIGQUERY_ENDPOINT is not set.'); return }
   await bigQueryFixtures(endpoint)
-  await launch({ ...launchOptions, env: { ...env, VARIA_TEST_USER_DATA: bigQueryProfile, VARIA_TEST_BIGQUERY_ENDPOINT: endpoint } })
+  // Off Windows a headless run has no keyring: the saved index's key is protected by the reversible test cipher.
+  await launch({ ...launchOptions, env: { ...env, VARIA_TEST_USER_DATA: bigQueryProfile, VARIA_TEST_BIGQUERY_ENDPOINT: endpoint, ...process.platform === 'win32' ? {} : { VARIA_TEST_SAFE_STORAGE: 'test' } } })
   try {
     const dialog = await open()
     const serverTypeGroup = dialog.getByRole('group', { name: 'Server type', exact: true })
@@ -1725,7 +1743,7 @@ async function bigQueryEmulator() {
     await editorTextbox(page).focus()
     await page.keyboard.type('SELECT 1')
     await expect(queryBar(page).getByRole('status', { name: 'Estimate: No estimate', exact: true })).toBeVisible({ timeout: 20000 })
-    await bigQuerySearchDetails()
+    await bigQuerySearchDetails(bigQueryProfile)
     // The query now has unsaved text: the quit below answers Don't Save.
     await app.evaluate(({ dialog }) => { dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false }) })
     // Next time, the dialog opens on the type used last, and history lists the project.

@@ -3,15 +3,20 @@
 // Reassign to); the jobs that notify operators, read-only; and Add recommended alerts. Save sends one change per changed alert.
 import { useEffect, useState, type KeyboardEvent } from 'react'
 import { agentAlertText, notifyEmail, notifyNetSend, notifyPager, type AgentRecommendedSave } from '../../../shared/actions/agent-alert.ts'
-import { agentOperatorText, cellText, operatorUses, withCell, type AgentNotifyMatrix, type AgentOperatorRecord, type AgentOperatorsModel } from '../../../shared/actions/agent-operator.ts'
+import { agentOperatorText, cellText, operatorUses, withCell, type AgentJobNotifyRow, type AgentNotifyMatrix, type AgentOperatorRecord, type AgentOperatorsModel } from '../../../shared/actions/agent-operator.ts'
 import { agentLimits } from '../../../shared/agent/catalog.ts'
 import { useServiceSnapshot, useWorkbench } from '../core/WorkbenchContext'
 import SubDialog from '../dialogs/SubDialog'
 import Icon from '../Icon'
-import DocumentFrame, { type FrameSection, type Verb } from '../kit/DocumentFrame'
+import { resizeScript, setScriptOpen } from '../kit/document-frame'
+import { type Verb } from '../kit/DocumentFrame'
+import FactGrid from '../kit/FactGrid'
 import InlineError from '../kit/InlineError'
+import ObjectInspectorFrame, { type InspectorTab } from '../kit/ObjectInspectorFrame'
+import ResizableSplit from '../kit/ResizableSplit'
 import Skeleton from '../kit/Skeleton'
-import { agentObjectText, operatorsSections, type AgentObjectState, type OperatorsDocumentService } from './AlertOperatorDocumentService'
+import StatusPill from '../kit/StatusPill'
+import { agentObjectText, type AgentObjectState, type OperatorsDocumentService } from './AlertOperatorDocumentService'
 import { methodChoices } from './AlertDocument'
 
 type State = AgentObjectState<AgentOperatorsModel, AgentNotifyMatrix>
@@ -52,7 +57,7 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
 }) {
   const alerts = model.alerts ?? []
   const [focus, setFocus] = useState({ row: 0, column: 0 })
-  if (!model.operators.length) return <p className="field-note">The server has no operators yet. New Operator adds one.</p>
+  if (!model.operators.length) return <div className="agent-operators-empty"><p className="field-note">The server has no operators yet. New Operator adds one.</p></div>
   const base = state.base
   const rows = alerts.length, columns = model.operators.length
   const stop = { row: Math.min(focus.row, Math.max(0, rows - 1)), column: Math.min(focus.column, Math.max(0, columns - 1)) }
@@ -64,29 +69,33 @@ function Grid({ state, model, draft, editable, service, selected, onSelect }: {
     setFocus(next)
     event.currentTarget.querySelector<HTMLButtonElement>(`[data-cell="${next.row}:${next.column}"]`)?.focus()
   }
-  return <div className="agent-operators-grid-wrap">
-    <table className="properties-table agent-operators-grid" aria-label="Operators and notifications">
-      <thead><tr><th scope="col">Alert</th>{model.operators.map(operator => <th key={operator.id} scope="col" data-selected={operator.name === selected || undefined}>
-        <button type="button" className="agent-operators-head" aria-pressed={operator.name === selected} onClick={() => onSelect(operator.name)}>{operator.name}{!operator.enabled && ' (disabled)'}</button>
-      </th>)}</tr></thead>
-      <tbody onKeyDown={keyDown}>{alerts.length === 0 ? <tr><td colSpan={model.operators.length + 1} className="field-note">{alertsNote(model)}</td></tr>
-        : alerts.map((alert, row) => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
-          <th scope="row">{alert.name}</th>
-          {model.operators.map((operator, column) => {
-            const methods = draft.get(alert.name)?.get(operator.name) ?? 0
-            const changed = (base?.get(alert.name)?.get(operator.name) ?? 0) !== methods
-            return <td key={operator.id} data-changed={changed || undefined} data-selected={operator.name === selected || undefined}>
-              <button type="button" className="agent-operators-cell" aria-disabled={!editable || undefined} data-cell={`${row}:${column}`} tabIndex={row === stop.row && column === stop.column ? 0 : -1}
-                onFocus={() => setFocus({ row, column })} aria-label={`${alert.name}, ${operator.name}: ${methodsWords(methods)}`}
-                onClick={() => { if (editable) service.updateDraft(state.id, matrix => withCell(matrix, alert.name, operator.name, nextMethods(methods))) }}>{cellText(methods) || '·'}</button>
-            </td>
-          })}
-        </tr>)}</tbody>
-    </table>
-    <p className="field-note">Click a cell (or press Enter or Space on it; the arrow keys move between cells) to cycle e-mail (E), e-mail and pager (EP), pager (P) and none.</p>
-    {model.alertsTruncated && <p className="field-note">Only the first {agentLimits.alertRows} alerts are shown.</p>}
-    {model.operatorsTruncated && <p className="field-note">Only the first {agentLimits.operatorRows} operators are shown.</p>}
-  </div>
+  return <>
+    <div className="agent-operators-grid-wrap">
+      <table className="agent-table borderless agent-operators-grid" aria-label="Operators and notifications">
+        <thead><tr><th scope="col">Alert</th>{model.operators.map(operator => <th key={operator.id} scope="col" data-selected={operator.name === selected || undefined}>
+          <button type="button" className="agent-operators-head" aria-pressed={operator.name === selected} onClick={() => onSelect(operator.name)}>{operator.name}{!operator.enabled && ' (disabled)'}</button>
+        </th>)}</tr></thead>
+        <tbody onKeyDown={keyDown}>{alerts.length === 0 ? <tr><td colSpan={model.operators.length + 1} className="field-note">{alertsNote(model)}</td></tr>
+          : alerts.map((alert, row) => <tr key={alert.id} data-disabled={!alert.enabled || undefined}>
+            <th scope="row">{alert.name}</th>
+            {model.operators.map((operator, column) => {
+              const methods = draft.get(alert.name)?.get(operator.name) ?? 0
+              const changed = (base?.get(alert.name)?.get(operator.name) ?? 0) !== methods
+              return <td key={operator.id} data-changed={changed || undefined} data-selected={operator.name === selected || undefined}>
+                <button type="button" className="agent-operators-cell" data-set={methods > 0 || undefined} aria-disabled={!editable || undefined} data-cell={`${row}:${column}`} tabIndex={row === stop.row && column === stop.column ? 0 : -1}
+                  onFocus={() => setFocus({ row, column })} aria-label={`${alert.name}, ${operator.name}: ${methodsWords(methods)}`}
+                  onClick={() => { if (editable) service.updateDraft(state.id, matrix => withCell(matrix, alert.name, operator.name, nextMethods(methods))) }}>{cellText(methods) || '·'}</button>
+              </td>
+            })}
+          </tr>)}</tbody>
+      </table>
+    </div>
+    <div className="agent-operators-foot">
+      <p className="field-note">Click a cell (or press Enter or Space on it; the arrow keys move between cells) to cycle e-mail (E), e-mail and pager (EP), pager (P) and none.</p>
+      {model.alertsTruncated && <p className="field-note">Only the first {agentLimits.alertRows} alerts are shown.</p>}
+      {model.operatorsTruncated && <p className="field-note">Only the first {agentLimits.operatorRows} operators are shown.</p>}
+    </div>
+  </>
 }
 
 function SidePane({ state, model, operator, service, onDelete }: { readonly state: State; readonly model: AgentOperatorsModel; readonly operator: AgentOperatorRecord; readonly service: OperatorsDocumentService; readonly onDelete: () => void }) {
@@ -95,17 +104,20 @@ function SidePane({ state, model, operator, service, onDelete }: { readonly stat
   const testBlocked = !model.sysadmin ? agentOperatorText.testSysadmin : !operator.enabled ? agentOperatorText.testDisabled : !operator.email ? agentOperatorText.testNeedsEmail : model.mail.xps === false ? agentOperatorText.testMailOff : model.mail.checked && !model.mail.agentProfile ? agentOperatorText.testNeedsProfile : undefined
   const connectionId = documents.get(state.id)?.connectionId
   return <aside className="agent-operators-side" aria-label={`Operator ${operator.name}`}>
-    <h3><Icon name="agent-operator" />{operator.name}</h3>
-    <dl className="agent-job-facts">
-      <dt>E-mail</dt><dd>{operator.email || '—'}</dd>
-      <dt>Pager</dt><dd>{operator.pager || '—'}</dd>
-      <dt>Enabled</dt><dd>{operator.enabled ? 'Yes' : 'No'}</dd>
-      <dt>Notified by</dt><dd>{uses.alerts + uses.jobs ? agentOperatorText.deleteUses(uses.alerts, uses.jobs) : agentOperatorText.deleteUnused}</dd>
-    </dl>
+    <div className="agent-operators-side-head">
+      <h3><Icon name="agent-operator" /><span>{operator.name}</span></h3>
+      <StatusPill size="small" tone={operator.enabled ? 'success' : 'neutral'} label={operator.enabled ? 'Enabled' : 'Disabled'} />
+    </div>
+    <FactGrid compact facts={[
+      { id: 'email', label: 'E-mail', value: operator.email || '', mono: !!operator.email },
+      { id: 'pager', label: 'Pager', value: operator.pager || '', mono: !!operator.pager },
+      { id: 'alerts', label: 'Alerts', value: String(uses.alerts), copyable: false },
+      { id: 'jobs', label: 'Jobs', value: String(uses.jobs), copyable: false }
+    ]} />
     <p className="agent-operators-side-actions">
-      <button type="button" disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => operatorDocuments.open(connectionId, { kind: 'agentOperator', name: operator.name }), 'The operator could not be opened.') }}><Icon name="go-to-file" />Open</button>
+      <button type="button" disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => operatorDocuments.open(connectionId, { kind: 'agentOperator', name: operator.name }), 'The operator could not be opened.') }}><Icon name="go-to-file" />Open Operator</button>
       <button type="button" title={testBlocked} disabled={!!testBlocked || !service.canReload(state.id)} onClick={() => void service.sendTest(state.id, operator)}><Icon name="agent-operator" />Send test e-mail</button>
-      {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id) || !!deleteBlocked(state.changes, model)} title={deleteBlocked(state.changes, model)} onClick={onDelete}><Icon name="trash" />Delete…</button>}
+      {model.sysadmin && <button type="button" className="danger" disabled={!service.canReload(state.id) || !!deleteBlocked(state.changes, model)} title={deleteBlocked(state.changes, model)} onClick={onDelete}><Icon name="trash" />Delete &amp; reassign…</button>}
     </p>
     {testBlocked && <p className="field-note">{testBlocked}</p>}
   </aside>
@@ -159,27 +171,32 @@ function AddRecommended({ state, model, service, onClose }: { readonly state: St
   </SubDialog>
 }
 
-function JobsTable({ state, model }: { readonly state: State; readonly model: AgentOperatorsModel }) {
+function JobsTable({ state, jobs }: { readonly state: State; readonly jobs: readonly AgentJobNotifyRow[] }) {
   const { jobDocuments, documents, commands } = useWorkbench()
   const connectionId = documents.get(state.id)?.connectionId
-  const jobs = (model.jobs ?? []).filter(job => job.email || job.page || job.netSend)
-  if (!jobs.length) return null
-  return <section className="agent-operators-jobs" aria-label="Jobs that notify operators">
-    <h3>Jobs that notify operators</h3>
-    <table className="properties-table">
-      <thead><tr><th scope="col">Job</th><th scope="col">E-mail</th><th scope="col">Page</th><th scope="col"><span className="visually-hidden">Open</span></th></tr></thead>
-      <tbody>{jobs.map(job => <tr key={job.id}><th scope="row">{job.name}</th><td>{job.email || '—'}</td><td>{job.page || '—'}</td>
-        <td><button type="button" aria-label={`Open ${job.name}`} disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => jobDocuments.openJob(connectionId, job.name), 'The job could not be opened.') }}>Open job</button></td>
-      </tr>)}</tbody>
-    </table>
-    <p className="field-note">A job's notifications are changed in its own document.</p>
-  </section>
+  return <div className="agent-operators-jobs-pane">
+    <div className="agent-operators-jobs-scroll">
+      <section className="agent-operators-jobs" aria-label="Jobs that notify operators">
+        {jobs.length === 0 ? <p className="field-note">No jobs currently notify an operator on completion.</p>
+          : <table className="agent-table borderless">
+            <thead><tr><th scope="col">Job</th><th scope="col">E-mail</th><th scope="col">Page</th><th scope="col"><span className="visually-hidden">Open</span></th></tr></thead>
+            <tbody>{jobs.map(job => <tr key={job.id}><th scope="row">{job.name}</th><td>{job.email || '—'}</td><td>{job.page || '—'}</td>
+              <td><button type="button" aria-label={`Open ${job.name}`} disabled={!connectionId} onClick={() => { if (connectionId) reported(commands, () => jobDocuments.openJob(connectionId, job.name), 'The job could not be opened.') }}>Open job</button></td>
+            </tr>)}</tbody>
+          </table>}
+      </section>
+    </div>
+    <div className="agent-operators-foot">
+      <p className="field-note">A job's notifications are changed in its own document.</p>
+    </div>
+  </div>
 }
 
 export default function OperatorsDocument({ documentId }: { documentId: string }) {
   const { operatorsDocuments, commands } = useWorkbench()
   const { documents } = useServiceSnapshot(operatorsDocuments)
   const [selected, setSelected] = useState<string>()
+  const [activeTab, setActiveTab] = useState<'matrix' | 'jobs'>('matrix')
   const [chosen, setDialog] = useState<'delete' | 'recommended'>()
   const state = documents[documentId]
   // Add recommended alerts from the Alerts folder asks for its dialog once the grid has read the server.
@@ -196,17 +213,34 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
   const args = { tabId: state.id }
   const verbs: Verb[] = [{ command: 'agentOperators.reload', args, label: 'Reload' }, { command: 'agentOperators.save', args, label: state.changes ? `Save · ${state.changes} ${state.changes === 1 ? 'change' : 'changes'}` : 'Save', emphasis: 'primary' }]
   const operator = model?.operators.find(item => item.name === selected) ?? model?.operators[0]
-  const content = !model || !draft ? state.phase === 'loading' ? <Skeleton rows={4} label="Reading the operators" /> : <p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the operators could not be read.' : ''}</p>
-    : <div className="agent-operators-body">
+  const notifyingJobs = (model?.jobs ?? []).filter(job => job.email || job.page || job.netSend)
+  const loadingOrError = state.phase === 'loading'
+    ? <div className="agent-operators-empty"><Skeleton rows={4} label="Reading the operators" /></div>
+    : <div className="agent-operators-empty"><p className="field-note">{state.phase === 'loadFailed' ? 'Nothing to show: the operators could not be read.' : ''}</p></div>
+  const matrixContent = !model || !draft ? loadingOrError : (
+    <ResizableSplit className="agent-operators-split" mainClassName="agent-operators-main" side="right" storageKey="agent.operators.side"
+      defaultWidth={264} minWidth={220} maxWidth={400} minOtherWidth={380} narrowStackWidth={600} railOpen={!!operator}
+      label="Resize selected operator rail"
+      rail={operator ? <SidePane state={state} model={model} operator={operator} service={operatorsDocuments} onDelete={() => setDialog('delete')} /> : null}>
       <Grid state={state} model={model} draft={draft} editable={editable} service={operatorsDocuments} {...operator ? { selected: operator.name } : {}} onSelect={setSelected} />
-      {operator && <SidePane state={state} model={model} operator={operator} service={operatorsDocuments} onDelete={() => setDialog('delete')} />}
-      <JobsTable state={state} model={model} />
-      {dialog === 'delete' && operator && <DeleteOperator state={state} model={model} operator={operator} service={operatorsDocuments} onClose={() => setDialog(undefined)} />}
-      {dialog === 'recommended' && <AddRecommended state={state} model={model} service={operatorsDocuments} onClose={() => { setDialog(undefined); operatorsDocuments.setAsk(state.id, undefined) }} />}
-    </div>
-  const sections: FrameSection[] = operatorsSections.map(section => ({ id: section.id, title: section.title, problem: false, content }))
+    </ResizableSplit>
+  )
+  const jobsContent = !model || !draft ? loadingOrError : <JobsTable state={state} jobs={notifyingJobs} />
+  const tabs: InspectorTab[] = [
+    {
+      id: 'matrix', title: 'Alerts Matrix', layout: 'fill',
+      count: model?.alerts?.length, modified: state.changes > 0,
+      problem: operatorsDocuments.problems(state.id).some(problem => problem.severity === 'error'),
+      content: matrixContent
+    },
+    {
+      id: 'jobs', title: 'Jobs Notifying Operators', layout: 'fill',
+      count: model ? notifyingJobs.length : undefined,
+      content: jobsContent
+    }
+  ]
   const phaseLabel = state.phase === 'loading' ? 'Reading the operators…' : state.phase === 'saving' ? 'Saving the notifications…' : state.busy
-  const recovery = state.phase === 'loadFailed' ? [{ label: 'Reload', run: () => operatorsDocuments.reload(state.id) }] : []
+  const recovery = state.phase === 'loadFailed' || state.unread || state.error?.code === 'NOT_FOUND' ? [{ label: 'Reload', run: () => operatorsDocuments.reload(state.id) }] : []
   const banner = <>
     {phaseLabel && <p className="document-status" role="status"><Icon name="loading" spin />{phaseLabel}</p>}
     {state.error && <InlineError message={state.error.message} code={state.error.code} context={`Operators on ${state.server}`} actions={recovery} />}
@@ -217,8 +251,16 @@ export default function OperatorsDocument({ documentId }: { documentId: string }
     <button type="button" disabled={!operatorsDocuments.canReload(state.id) || !model.alerts || state.changes > 0} title={state.changes > 0 ? agentObjectText.saveFirst : undefined} onClick={() => setDialog('recommended')}><Icon name="check" />Add recommended alerts…</button>
     <button type="button" onClick={() => void commands.execute('agent.newOperator', { tabId: state.id }, 'toolbar')}><Icon name="add" />New operator</button>
   </span> : null
-  return <DocumentFrame id={`agent-operators-${state.id}`} title="Operators and notifications" subtitle="SQL Server Agent"
-    crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'SQL Server Agent' }, { label: 'Operators' }]}
-    tools={tools} verbs={verbs} banner={banner} sections={sections} frame={state.frame} onFrame={frame => operatorsDocuments.setFrame(state.id, frame)}
-    attributes={{ 'data-agent-operators': state.id }} script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void operatorsDocuments.deliver(state.id, destination) }} />
+  return <>
+    <ObjectInspectorFrame id={`agent-operators-${state.id}`} surface="full" title="Operators and notifications" subtitle="SQL Server Agent"
+      crumbs={[{ label: state.server, title: state.login ? `${state.server} (${state.login})` : state.server }, { label: 'SQL Server Agent' }, { label: 'Operators' }]}
+      tools={tools} verbs={verbs} banner={banner} tabs={tabs} activeTab={activeTab} onSelectTab={id => setActiveTab(id as 'matrix' | 'jobs')}
+      attributes={{ 'data-agent-operators': state.id }}
+      script={{ content: state.script, notice: state.scriptNotice, onDeliver: destination => void operatorsDocuments.deliver(state.id, destination) }}
+      scriptOpen={state.frame.scriptOpen} scriptSize={state.frame.scriptSize}
+      onScriptToggle={() => operatorsDocuments.setFrame(state.id, setScriptOpen(state.frame, !state.frame.scriptOpen))}
+      onScriptResize={size => operatorsDocuments.setFrame(state.id, resizeScript(state.frame, size))} />
+    {dialog === 'delete' && operator && model && <DeleteOperator state={state} model={model} operator={operator} service={operatorsDocuments} onClose={() => setDialog(undefined)} />}
+    {dialog === 'recommended' && model && <AddRecommended state={state} model={model} service={operatorsDocuments} onClose={() => { setDialog(undefined); operatorsDocuments.setAsk(state.id, undefined) }} />}
+  </>
 }

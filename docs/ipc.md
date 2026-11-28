@@ -250,7 +250,8 @@ noted where it matters.
 | `language.complete`, `language.hover`, `language.diagnostics` | invoke | unary | metadata | 30 s |
 | `language.refresh` | invoke | unary | control | 30 s; on the control lane so it can cancel stale language work while the metadata slots are full |
 | `language.definition` | invoke (F12, Alt+F12, Ctrl+hover, Ctrl+click) | unary | metadata | 15 s, budget 10 s. Takes a `language.complete` request; answers `null` or `{ database, schema, name, kind, subtype?, range }`, read on the Object Explorer pool with constant `DefinitionSql.Lookup` (names as parameters, cross-database through `QUOTENAME(@db) + '.sys.sp_executesql'`) |
-| `language.lookup` | invoke | unary | metadata | 10 s, BigQuery only. The editor's read of the Search Objects index by path: `{ connectionId, requests: { path: string[] ≤ 3 (each 1 – 1,024), prefix? ≤ 4,608, exact?, limit? 1 – 2,000 (default 500), details? }[1..16] }` (`exact` needs `prefix`). Answers `{ index: 'none' \| 'building' \| 'ready', answers: { state, path, items, truncated, object?, skip? }[] }`, at most 4,000 items in all, from memory: nothing reaches BigQuery ([Completion from the index](language-services.md#completion-from-the-index)) |
+| `language.lookup` | invoke | unary | metadata | 10 s, BigQuery only. The editor's read of the Search Objects index by path or cross-project jump: `{ connectionId, requests: { path: string[] ≤ 3 (each 1 – 1,024), prefix? ≤ 4,608, exact?, limit? 1 – 2,000 (default 500), details?, mode?: 'children' \| 'jump', dataset? ≤ 1,024 }[1..16] }` (`exact` needs `prefix`; `mode: 'jump'` requires empty `path`, `prefix` 2 – 128 chars, `limit` ≤ 50, no `exact`). Answers `{ index: 'none' \| 'building' \| 'ready', answers: { state, path, items, truncated, object?, skip? }[] }` (items may carry `tier`, `namesOnly`, `partial`, `recent`, `indexing`, `project`, `dataset`, `rows`, `bytes`, `partitioning`, `clustering`, and clipped `description`), at most 4,000 items or 12 MiB estimated UTF-8/MessagePack bytes in all, from memory: nothing reaches BigQuery ([Completion from the index](language-services.md#completion-from-the-index)) |
+| `language.hydrate` | invoke | unary | metadata | 15 s, BigQuery only. Free on-demand REST `tables.get` / `routines.get` schema hydration for referenced BigQuery objects: `{ connectionId, targets: { project ≤ 128, dataset ≤ 1,024, name ≤ 1,024, kind?: 'table' \| 'routine', allowExternal? }[1..8] }`. Answers `{ outcomes: { project, dataset, name, status: 'hydrated' \| 'cached' \| 'notFound' \| 'forbidden' \| 'external' \| 'budget' \| 'throttled' \| 'error', code? }[] }`. Rate-limited per principal and sliding window, cached into `DatabaseIndex` under the shared memory budget, with a short negative cache for 404/403; never runs billed queries |
 | `plans.parse` | invoke | unary | metadata | 15 s; parses Showplan only, no SQL connection. Main compresses raw XML before the 4 MiB request bound ([Execution plan viewer](#execution-plan-viewer)) |
 | `plans.estimate` | invoke | unary | query | 35 s; 30 s acquisition budget (connection and compilation; a full gate of 2 answers `BUSY` at once); `mode: isolated \| session` (default isolated), two acquisitions, 64 documents / 2,097,152 XML characters in total; cancelled by `query.cancel(requestId)`; no query events or summary fields ([estimated plans](execution-plans.md#estimated-plans)) |
 | `query.execute` | invoke, events on the port | unary with EVENTs | query | none; backstop `timeoutSeconds + 30` s |
@@ -283,6 +284,7 @@ noted where it matters.
 | `live.update` | port | unary | control | 10 s |
 | `explorer.children` | invoke; `explorerCancel` | unary | explorer | 45 s, budget 40 s |
 | `explorer.index` | invoke; `explorerCancel` | unary with droppable `explorer.index.progress` EVENTs (relayed to the requesting window, ≤ 4/s) | explorer | none; 120 s budget per database, 30 s per BigQuery metadata call ([Search Objects](object-search.md)) |
+| `explorer.indexStatus` | invoke | unary | explorer | 5 s; reads the index's counters only (what a stopped build kept) |
 | `explorer.search` | invoke; `explorerCancel` | unary | explorer | 15 s; stops at 5 s and answers `partial` |
 | `explorer.peek` | invoke; `explorerCancel` | unary | explorer (Peek's slot per connection) | 30 s, budget 15 s from when it has the slot |
 | `explorer.peekDependencies` | as `explorer.peek` | unary | as `explorer.peek` | as `explorer.peek` |
@@ -331,8 +333,26 @@ Notes:
    read (`SettingsStore.onDidLoad`). A failed request is not re-sent: a value set while it was in flight, the generation's
    recovery from unresponsive, the next change or the next launch sends a new one.
 
+4. `explorer.indexStore.configure { mode, folder, limitMiB, key? }`: how the saved Search Objects index stands
+   (docs/object-search.md, Saved index). `mode` is `encrypted`, `clearText`, `disabled` or `noKeyStore`; `folder` is a
+   full path of at most 2,048 characters whose last part is `SearchIndex`; `limitMiB` is 64 to 262,144; `key` is 32
+   bytes in base64 (44 characters), present exactly when the mode is `encrypted` (the files' key) or `clearText` (a
+   value that only names files). Anything else is `INVALID_PARAMS`, checked in zod (`indexStoreConfigureSchema`) and in
+   C# (`IndexStore.Configure`). It answers the store's status `{ mode, files, bytes, limitBytes }`, where `mode` may
+   also be `unavailable` (the folder cannot be used). The request is sensitive (its frame is zeroed once written). Main
+   sends it, one in flight, as each generation becomes ready, when one of the three `objectExplorer.search` saving
+   settings changes, and after each successful settings read (`IndexStoreConfig`). It sends nothing (the backend then
+   saves and deletes nothing) before the settings are read, while one of the three was reset by an unreadable
+   `settings.json`, and while the key store does not answer or is not reachable yet; it asks the key store again after
+   30 s, doubling to at most 10 minutes. Only a lasting answer (no keyring, no backend) gives `noKeyStore` or `clearText`. A failed request is not re-sent: the next change, the generation's
+   recovery from unresponsive or the next launch sends a new one.
+5. `explorer.indexStore.clear {}` (60 s): deletes every file of the saved index and answers `{ files, bytes, kept }`
+   (deleted, their bytes, and files that could not be deleted). Main sends it for Clear Saved Search Indexes
+   (`varia:index-store-clear`) and hands the page only those three counts.
+
 `mainOnlyMethods` (`results.copy`, `results.export`, `entra.cache.clear`, `results.setMemoryLimit`,
-`debug.results.synthesize`) are sent only by main: they are in no renderer schema (`requestSchemas`) and no port schema
+`debug.results.synthesize`, `bigquery.endIdleSessions`, `bigquery.cancelJobs`, `explorer.indexStore.configure`,
+`explorer.indexStore.clear`) are sent only by main: they are in no renderer schema (`requestSchemas`) and no port schema
 (`portRequestSchema`).
 
 **Microsoft Entra ID.** The six Entra types (`entraMfa`, `entraPassword`, `entraIntegrated`, `entraServicePrincipal`,
@@ -738,7 +758,7 @@ a `bigquery` connect opens a BigQuery handle ([BigQuery](bigquery.md)). `.databa
 both, each source only the engines its catalogue entry names (Job History's `bigquery.jobs` is BigQuery's). `bigquery.account`,
 `bigquery.projects`, `bigquery.connectionProjects`, `bigquery.dryRun`, `bigquery.properties`, `bigquery.indexEstimate`, `bigquery.endIdleSessions`,
 `bigquery.cancelJobs`, `bigquery.jobs.get`, `bigquery.jobs.cancel`, `results.remoteQuery`, `query.attach` and
-`language.lookup` serve BigQuery alone (`Providers.BigQueryMethods`). Two main-only channels serve the Connect dialog:
+`language.hydrate` serve BigQuery alone (`Providers.BigQueryMethods`). `language.lookup` serves both engines (in-process Search Objects index lookup). Two main-only channels serve the Connect dialog:
 `varia:connections-pick-key-file` (main's file picker; answers an opaque reference and the file's name) and
 `varia:connections-confirm-source` (records a federation token file the user confirmed), one serves the cost prompt:
 `varia:bigquery-cost-prompt` (`{ options, costPrompt }`, strict; sets only the saved entry's cost-prompt choice and answers
@@ -972,7 +992,7 @@ authoritative; a query's events after it are ignored.
 | type | Emitted |
 | --- | --- |
 | `results.memory` | Checked once a second, and after `results.close` and `results.setMemoryLimit` before their answers; reports the first sample and any change of use or of the global figure. A query summary's `budget` counts as a report and shares this sequence (so an older summary can be discarded); as it has no `detail`, the next check after one always sends, and main keeps the last event's `detail` until then |
-| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use (a fall below the last walk's figure waits for the next walk, at the first check 5 s after the last), a build's end, a disconnect and a finished search (whose time `detail` carries). Own sequence |
+| `explorer.index.memory` | Checked once a second and after a disconnect drops a connection's index; reports the first sample, changes in the shared index budget's use (a fall below the last walk's figure waits for the next walk, at the first check 5 s after the last) or in its limit (`globalBytes`, which a build's `memoryLimitMiB` sets), a build's end, a disconnect and a finished search (whose time `detail` carries), and a change in the saved index's figures. Once main has configured the saved index it also carries `store` (`indexStoreStatusSchema`): `{ mode, files, bytes, limitBytes }`, never a path, a key or a name. Own sequence |
 
 Both are droppable; a refused sample consumes no sequence number and stays eligible. Main pairs each sequence with the
 generation, keeps the latest per feature, and replays both when a results port opens.
@@ -1338,8 +1358,10 @@ view is an order of some or all of a result's base rows, read through the result
   result; a ninth drops the oldest.
 - **Order.** Stable, as ORDER BY: NULL and unreadable cells lowest; exact numerics by value, real/float as doubles,
   uniqueidentifier in SQL Server's byte order, datetimeoffset by UTC instant, other date/time types by fixed-width text,
-  binary bytewise, character columns by collation (code points for _BIN/_BIN2) ignoring trailing spaces, other types by
-  display text code points. `chars`/`bytes` order character, xml, json (and binary, for `bytes`) by cell length
+  binary bytewise, character columns by collation (non-Unicode `SQL_*` collations with string sort, Unicode and Windows
+  collations with word sort, legacy Unicode `_BIN` in SQL Server's legacy binary order, `_BIN2` by code points) ignoring
+  trailing spaces, other types by display text code points. `chars`/`bytes` order character, xml, json (and binary, for
+  `bytes`) by cell length
   ([Cell lengths and row sizes](#cell-lengths-and-row-sizes)); other columns ignore the mode.
 - **Progress (`op.progress`).** `results.view`, `.profile`, `.distinct` (open), `.pivot` and `.diff` send droppable
   `{ type: 'op.progress', phase, percent? }` EVENTs (`OperationProgress.cs`). Phases: `filter`, `keys`, `sort`, `unpack`,
@@ -1826,7 +1848,7 @@ escaping is ASCII (plus U+2028/U+2029 as their three bytes).
 | NULL and read errors | `NULL` | `NULL` | empty field | `null` |
 | Text | CRLF, CR, LF, TAB and NUL each become one space (Windows ends clipboard text at a NUL) | CRLF, CR, LF and TAB each become one space | quoted when it holds `,` `"` CR or LF, `"` doubled, line breaks kept; an empty string is `""` | a JSON string: `"`, `\`, C0, U+2028 and U+2029 escaped, everything else raw |
 | Binary, CLR types | `0x` + uppercase hex | same | same | `"0x…"` |
-| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as the display text when it is a JSON number of at most 15 significant digits, otherwise a string; bit as `true`/`false`; everything else a string |
+| Numbers | display text | same | same | tinyint, smallint, int, bigint, decimal, numeric, money, smallmoney, real and float as a JSON number (using the page's exact finite double for real/float when available so extreme values round-trip, otherwise the display text when it is a finite JSON number of at most 15 significant digits) or a string; bit as `true`/`false`; everything else a string |
 | Column names | blank → `(No column name)` | same | same, as a field | blank → `Column{ordinal}`; repeats get `_2`, `_3`… |
 | Truncated cells | the stored prefix, counted in `truncatedCells` | same | same | same |
 
@@ -2586,7 +2608,7 @@ terminal for live probes. Display login text is never identity proof.
 
 | Origin | Codes |
 | --- | --- |
-| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `READ_ONLY_VIOLATION` (a cross-engine SELECT run refused a non-read-only statement), `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)) |
+| Backend | `INVALID_REQUEST`, `INVALID_PARAMS`, `METHOD_NOT_FOUND`, `BUSY`, `CANCELLED`, `TIMEOUT`, `SQL_ERROR`, `SMO_ERROR`, `BACKEND_ERROR`, `NOT_CONNECTED`, `NOT_FOUND`, `DUPLICATE_QUERY`, `DUPLICATE_REQUEST`, `SESSION_BUSY`, `SESSION_LOST`, `SESSION_CLOSED`, `SESSION_TARGET`, `SESSION_LIMIT`, `AUTH_UNSUPPORTED`, `AUTH_KERBEROS`, `AUTH_ENTRA`, `AUTH_IDENTITY`, `AUTH_EXPIRED`, `AUTH_KEY_FILE`, `API_DISABLED`, `BILLING_DISABLED`, `QUOTA`, `LEGACY_SQL`, `PERMISSION_DENIED`, `LOCATION_MISMATCH`, `RESULT_TOO_LARGE`, `COST_CAP`, `ROW_ACCESS`, `JOB_RUNNING`, `JOB_FINISHED` (BigQuery; [Error codes](#error-codes-and-fixed-sentences)), `REMOTE_RESULT`, `REMOTE_EXPIRED` (windowed BigQuery results; [Remote results](#remote-results)), `UNSUPPORTED_PROVIDER` (a method for another engine's connection; [Providers](#providers)), `INVALID_SCRIPT`, `READ_ONLY_VIOLATION` (a cross-engine SELECT run refused a non-read-only statement), `TOO_LARGE`, `RESPONSE_TOO_LARGE`, `RESULT_NOT_FOUND`, `RESULT_RELEASED`, `VIEW_NOT_FOUND`, `IDENTITY_NOT_FOUND`, `EXPORT_FAILED` (message: one token), `RESULT_OPEN`, `BUDGET_STOPPED` (a pivot or diff of a query that stopped storing; [Pivots](#pivots)), `DIFF_KEY_TRUNCATED` (a `results.diff` key column holds a truncated value; [Result diffs](#result-diffs)), `DIFF_ROWS_TOO_LARGE` (an All rows `results.diff` whose stored rows do not fit; [Result diffs](#result-diffs)), `NOT_READY` (`explorer.indexStore.clear` before the store is configured) |
 | GOAWAY | `PROTOCOL_ERROR`, `PROTOCOL_UNSUPPORTED`, `BACKEND_CRASH` |
 | Main | `BACKEND_LOST`, `BACKEND_UNAVAILABLE`, `CONNECTION_LOST`, `SESSION_LOST` (`query.session.state` of an ended generation or with no backend), `RESULT_UNAVAILABLE`, `TOO_MANY_REQUESTS`, `STREAM_PROTOCOL`, `PORT_CLOSED`, `TIMEOUT`, `CANCELLED` and `DUPLICATE_REQUEST` (Object Explorer loads, scripting, object actions and SSIS requests), `JOB_BUSY`, `TOO_LARGE` and `INVALID_REQUEST` (results jobs), `STALE` (a shortcuts save based on an older revision), `UNSUPPORTED_PROVIDER` (refused before sending), `DUPLICATE_REQUEST` and `NOT_FOUND` (live streams of the results port); an unknown backend code becomes `BACKEND_ERROR` |
 | Renderer | `PAGE_INVALID`, `RESULT_DECODER_FAILED` |
@@ -2630,6 +2652,7 @@ terminal for live probes. Display login text is never identity proof.
 | Banner: crash loop | "The SQL backend stopped repeatedly and was not restarted again." **Restart SQL Backend** **Copy details** |
 | Banner: cannot start | Development: "Could not start the .NET backend. Install .NET 11 and run npm run backend:build." Packaged: "Could not start the SQL backend. Reinstall Varia SQL Manager." |
 | Banner: different build | "The SQL backend is from a different build (protocol {x}, expected 2{; missing: method}). Run npm run backend:build, then restart." (packaged: "Reinstall Varia SQL Manager.") |
+| `NOT_READY` | `explorer.indexStore.clear` before main has configured the store: "The saved search indexes cannot be cleared yet: Varia is still waiting for the system key store or its settings. Nothing was deleted." |
 | `SESSION_LIMIT` | "This query was not executed: 1,000 query tabs already hold SQL sessions, the most Varia SQL Manager keeps open. Close query tabs you no longer need, or disconnect idle ones (Query > Connection > Disconnect), then execute again." |
 | `SESSION_LOST` (commit) | "The SQL session was lost, so SQL Server rolled back its transaction. Nothing was committed." While the commit ran: "The SQL session was lost while committing, so it is not known whether its transaction was committed. Check the data before running the work again." After a commit that never answered (state read too): "The SQL session was lost after a commit that did not finish (it was cancelled or timed out), so it is not known whether that commit took effect. Check the data before running the work again." |
 | Execute hint, lost connection | "This query's connection was lost when the SQL backend restarted. Reconnect to run queries." |
@@ -2746,7 +2769,8 @@ and reports that block skipped.
 - **Test seams** are honoured only when `VARIA_SMOKE_TEST=1` and the app is not packaged: `VARIA_TEST_BACKEND` (with an
   absolute `VARIA_TEST_NODE`), `VARIA_BACKEND_TEST_HOOKS`, `VARIA_RESULT_BUDGET_BYTES`, `VARIA_BACKEND_LIVENESS_MS`,
   `--varia-test-mode` (`window.__variaResults`, `window.__variaGrid`, `window.__variaRecovery.flush()`),
-  `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`), and
+  `globalThis.__variaTest`, `VARIA_TEST_SAFE_STORAGE=test` (a reversible test cipher instead of `safeStorage`) or `=none`
+  (a system with no key store), and
   `VARIA_TEST_FOLLOW_SYSTEM_MOTION=1` (`--varia-follow-system-motion`: the renderer reduces motion whenever the emulated
   media asks, without the setting).
   `VARIA_IPC_TRACE=1` (unpackaged only) logs each frame's kind, id and length to stderr, never a body.
@@ -2834,6 +2858,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
   (700,000 matches, far past the 20,000-candidate cap), reporting p95 of 20 warm searches and the memory one allocates,
   then a search inside 10,000 compressed procedure definitions (42 M characters) that matches none, so every one is
   unpacked and scanned (`node.search.definitionScanP95Ms`).
+  Its `--index-file-bench` mode (`IndexFileBench.cs`) reads one database of about 300,000 objects (tables with typed
+  columns, indexes, constraints, 30,000 distinct definitions) through the index's real reader, saves it with the index's
+  on-disk format (`IndexFile`) to a file, flushed, and loads it back into an empty pool, encrypted and in clear text
+  (`node.indexFile.*`): the times, the file's size against the memory the unit holds, and reading the header alone.
   Its `--find-bench` mode (`FindBench.cs`) times Find's culture matcher over 400,000 fictional multilingual cells in a
   Latin1_General_CI_AS column on one thread, with and without the pre-check (`node.find.*`). A quarter of its cells hold
   characters the fold does not vouch for (Thai, Hindi, ligatures, voiced half-width kana), so its ratio (about 1.9) sits
@@ -2884,6 +2912,10 @@ CI enforces floors on Linux (with live SQL Server); Windows and macOS report onl
 | Results picker: 1,251 views of 1,000 results listed, filtered and windowed per keystroke | ≥ 2,000 ops/s | ≥ 500 ops/s | – | – |
 | Object search: one letter over 1,000,000 indexed objects (700,000 hits), p95 | ≤ 75 ms | ≤ 500 ms | 55 ms (Windows, 24 CPUs) | not measured |
 | Object search: memory allocated by that search, median | ≤ 16 MB | ≤ 64 MB | 9 MB | not measured |
+| Index file: save a 300,000-object database unit, encrypted and flushed to disk, median of 5 | ≤ 150 ms | ≤ 1,500 ms | 48 ms, clear text 53 ms (Windows, 24 CPUs) | not measured |
+| Index file: load that unit into an empty pool and budget, every check made, median of 5 | ≤ 300 ms | ≤ 3,000 ms | 135 ms, clear text 120 ms (Windows, 24 CPUs) | not measured |
+| Index file: that unit's bytes on disk ÷ the bytes of the index's budget it holds | ≤ 0.35 | ≤ 0.6 | 0.29 (9.7 MB for 33.6 MB) | not measured |
+| Index file: open that file and read its header alone, mean of 200 | ≤ 1 ms | reported only | 0.2 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 2,000 operators, 1,999 ordered inputs, p95 | ≤ 20 ms | ≤ 500 ms | 2.8 – 4.1 ms (Windows, 24 CPUs) | not measured |
 | Plan ordered layout: 10,000 operators, four-way tree, p95 | ≤ 75 ms | ≤ 1,000 ms | 9.9 – 12 ms (Windows, 24 CPUs) | not measured |
 | Plan cached layout lookup: 10,000 operators, p95 | ≤ 5 ms | ≤ 50 ms | 0.92 – 1.08 ms (Windows, 24 CPUs) | not measured |

@@ -43,8 +43,13 @@ internal sealed class StringPool(IndexBudget budget)
     public PackedText? TryAcquire(PackedText value, long keepFree = 0, bool force = false) => (PackedText?)TryAcquire((object)value, keepFree, force);
 
     /// <summary>As the typed overloads, for a text of either form.</summary>
-    public object? TryAcquire(object value, long keepFree = 0, bool force = false)
+    public object? TryAcquire(object value, long keepFree = 0, bool force = false) => TryAcquire(value, keepFree, out _, force);
+
+    /// <summary>As <see cref="TryAcquire(object, long, bool)"/>, with what it charged the budget: the text's cost when the pool
+    /// did not hold it yet, else nothing.</summary>
+    public object? TryAcquire(object value, long keepFree, out long took, bool force = false)
     {
+        took = 0;
         lock (gate)
         {
             if (!Find(value, out var entry))
@@ -52,6 +57,7 @@ internal sealed class StringPool(IndexBudget budget)
                 var cost = Cost(value);
                 if (force) budget.Force(cost);
                 else if (!budget.TryTake(cost, keepFree)) return null;
+                took = cost;
                 entry = new Entry(value);
                 if (value is string text) entries[text] = entry;
                 else packed[(PackedText)value] = entry;

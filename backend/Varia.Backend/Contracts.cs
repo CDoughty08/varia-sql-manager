@@ -28,6 +28,19 @@ internal sealed record ConnectionInfo(string Id, string Server, string Database,
 internal sealed record IntegratedIdentity(string? Principal);
 /// <summary>connections.identity takes no parameters; reading them into this record refuses unknown members.</summary>
 internal sealed record IdentityArgs;
+/// <summary>explorer.indexStore.configure (main only): how the saved Search Objects index stands for this backend. Mode is
+/// encrypted, clearText, disabled or noKeyStore. Folder is the store's own folder under the user-data directory (a full path
+/// of at most 2,048 characters whose last part is SearchIndex). Key is 32 bytes in base64 (44 characters), given exactly when
+/// the mode is encrypted (the files' key) or clearText (a value that only names files). LimitMiB is the disk limit, 64 to
+/// 262,144. The request is sensitive: its frame is zeroed once written.</summary>
+internal sealed record IndexStoreConfigureArgs(string Mode, string Folder, int? LimitMiB, string? Key = null);
+/// <summary>The saved index as the Memory panel shows it: Mode is encrypted, clearText, disabled, noKeyStore or unavailable
+/// (the folder cannot be used); Files and Bytes are what the store's folder holds of its own; LimitBytes is the disk limit.</summary>
+internal sealed record IndexStoreStatus(string Mode, int Files, long Bytes, long LimitBytes);
+/// <summary>explorer.indexStore.clear takes no parameters; reading them into this record refuses unknown members.</summary>
+internal sealed record IndexStoreClearArgs;
+/// <summary>explorer.indexStore.clear: the files deleted, their bytes, and the files that could not be deleted.</summary>
+internal sealed record IndexStoreClearResult(int Files, long Bytes, int Kept);
 /// <summary>entra.cache.clear (main only) takes no parameters; reading them into this record refuses unknown members.</summary>
 internal sealed record EntraCacheArgs;
 /// <summary>entra.cache.clear: every Microsoft Entra token and credential in this process is gone.</summary>
@@ -45,7 +58,7 @@ internal sealed record TableArgs(string ConnectionId, string Database, string Sc
 internal sealed record QueryArgs(string ConnectionId, string SessionId, string? Database, string Sql, string QueryId, int MaxRows, int TimeoutSeconds, int StartLine = 1, int MaxResultSets = 10,
     bool StopOnError = false, bool IncludeActualPlan = false, bool IncludeClientStatistics = false, bool IncludeLivePlan = false, bool DiscardResults = false, string? Dataset = null,
     long? MaximumBytesBilled = null, bool? Prices = null, int StartColumn = 1, string? Residence = null, int? WindowCacheMiB = null, BigQuery.BigQueryPreviewTarget? Preview = null,
-    string? JobKey = null);
+    string? JobKey = null, bool NoDefaultDataset = false);
 /// <summary>query.session.close: Transaction "commit" commits the session's open transaction first; "rollback" is a plain close,
 /// since SQL Server rolls back what a closed session left open. AbortOnRefusedCommit (default true) lets a BigQuery commit
 /// refused on an unchecked session fall through to ending the session (docs/bigquery.md, Sessions); SQL Server ignores it,
@@ -125,8 +138,10 @@ internal sealed record ResultCodecCounters(string? Name, int? Level, long PagesP
     public static readonly ResultCodecCounters Off = new(null, null, 0, 0, 0, 0, 0, 0, 0, 0, 0);
 }
 /// <summary>The global explorer.index.memory EVENT: the shared index budget's figures and, for the Memory panel's Nerd metrics,
-/// what the index holds (docs/ipc.md, Global memory events); the detail is read when the event goes out.</summary>
-internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, IndexMemoryDetail Detail)
+/// what the index holds (docs/ipc.md, Global memory events); the detail is read when the event goes out. Store is the saved
+/// index on disk, left out until main has configured it.</summary>
+internal sealed record IndexMemoryEvent(long UsedBytes, long GlobalBytes, long Seq, IndexMemoryDetail Detail,
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] IndexStoreStatus? Store = null)
 {
     [JsonPropertyOrder(-1)] public string Type => "explorer.index.memory";
 }
@@ -152,7 +167,7 @@ internal sealed record MessageEntry(string Text, string Kind, int? Line = null, 
 /// (every batch ran and at least one raised an error; Error holds the errors and the first such batch), failed (an error
 /// stopped execution: before the first batch, with stopOnError, or by closing the session), cancelled, or timedOut.
 /// Spid (SqlConnection.ServerProcessId) and Login (SUSER_SNAME(), read with the SET prologue) are the session's, read once when
-/// it opened; both are present while it is still open after the script. IndexStale (BigQuery) numbers the newest stale mark the
+/// it opened; both are present while it is still open after the script. IndexStale numbers the newest stale mark the
 /// connection's Search Objects index has not spent yet, so the renderer asks one stale-only build per new mark.</summary>
 internal sealed record QueryResult(List<ResultDescriptor> ResultSets, int DiscardedResultSets, List<MessageEntry> Messages, long RecordsAffected, long ElapsedMs,
     string Status, QueryFailure? Error, int CompletedBatches, int TotalBatches, string Database, bool MessagesTruncated, ResultBudget Budget, string CompletedAt,
@@ -480,8 +495,14 @@ internal sealed record DependenciesResult(List<PeekDependency> Items, long Elaps
 /// Scope re-reads one project or dataset (Object Explorer's Refresh, re-reading every object in it), and Stale re-reads only the datasets DDL marked.</summary>
 /// <summary>Bulk: pass 2 reads these locations' details with the billed INFORMATION_SCHEMA queries (a full build only, after
 /// bigquery.indexEstimate and the cost prompts).</summary>
+/// <summary>Stale (either engine): a check rather than a full build: BigQuery re-reads the datasets DDL marked and re-lists those a
+/// search found due; SQL Server verifies the databases DDL marked or a search found due, and with it Database (Object Explorer's
+/// Refresh on a database, at most 128 characters) or CheckAll (on the server) checks that database or every one, whatever its age.</summary>
+/// <summary>MemoryLimitMiB (either engine): the memory every connection's index shares, as Options sets it
+/// (ObjectIndexLimits.MinMemoryMiB..MaxMemoryMiB); it applies from this build on, and absent leaves the limit as it is.</summary>
 internal sealed record ObjectIndexArgs(string ConnectionId, string RequestId, bool? Definitions = null, List<string>? StarredProjects = null, bool? AllProjects = null,
-    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null);
+    BigQueryIndexScope? Scope = null, bool? Stale = null, BigQueryBulkArgs? Bulk = null, int? MaxProjects = null, bool? MissingOnly = null, int? MemoryLimitMiB = null,
+    string? Database = null, bool? CheckAll = null);
 /// <summary>A BigQuery refresh's scope: a project, or one of its datasets.</summary>
 internal sealed record BigQueryIndexScope(string Project, string? Dataset = null);
 /// <summary>The bulk path's locations, as bigquery.indexEstimate answered them; the cap every job carries (a connection's own wins); and
@@ -504,10 +525,23 @@ internal sealed record ObjectIndexSkip(string Database, string Code, string Mess
 /// <summary>The index as a search finds it. State: none (never built), building, or ready. BuiltAt: UTC, when the last build ended.</summary>
 /// <summary>BigQuery: Databases and Indexed count datasets; Phase is projects, names (pass 1) or details (pass 2) while building; NamesOnly lists
 /// projects whose details could not be read due to the memory budget; Bulk is the last full build's billed bulk path, when it ran;
-/// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left).</summary>
+/// Projects counts the distinct projects held in the index; StaleMark numbers the newest DDL stale mark a stale-only build has not spent yet (absent when none is left);
+/// Stopped is true when the last full build was stopped before it finished, so the index holds only what it read (absent otherwise);
+/// SavedAt (UTC) is when the oldest dataset loaded from the saved index that no listing has checked yet was read (absent when none is).</summary>
+/// <summary>Freshness (either engine, docs/object-search.md, Freshness): ReadAt (UTC) is when the oldest held database or dataset was
+/// read, and Saved true when that read came from the saved index; CheckedAt (UTC) is when the unit checked longest ago was last
+/// confirmed against its source; Checking is true while a check runs; Stale counts units marked (DDL, or due by age) and not yet
+/// checked, and Unverified those that cannot be checked yet (a SQL Server read with no fingerprint, a BigQuery dataset loaded and
+/// not yet listed). Each absent when there is nothing to say.</summary>
+/// <summary>LeftOut: the definitions (counted in Cut too) left out whole because the index's memory ran out, and LeftOutIn the
+/// databases (BigQuery: datasets) they belong to (the server's own and the system objects are in none); each absent when zero.</summary>
 internal sealed record ObjectIndexStatus(string State, int Databases, int Indexed, int Objects, int Modules, int Cut, List<ObjectIndexSkip> Skipped, bool Definitions, string? BuiltAt = null,
-    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null);
+    string? Provider = null, string? Phase = null, List<string>? NamesOnly = null, BigQueryBulkStatus? Bulk = null, int? Projects = null, long? StaleMark = null, bool? Stopped = null,
+    int? LeftOut = null, int? LeftOutIn = null, string? SavedAt = null, string? ReadAt = null, bool? Saved = null, string? CheckedAt = null, bool? Checking = null,
+    int? Stale = null, int? Unverified = null);
 internal sealed record ObjectIndexResult(ObjectIndexStatus Status, long ElapsedMs);
+/// <summary>explorer.indexStatus: what a connection's index holds now, without building or searching.</summary>
+internal sealed record ObjectIndexStatusArgs(string ConnectionId);
 /// <summary>explorer.search: In is names, definitions or all; Kinds and Database narrow it; Limit is at most 1000 hits; Match is
 /// exact (the default) or fuzzy, which adds approximate name matches and cannot go with Regex.</summary>
 internal sealed record ObjectSearchArgs(string ConnectionId, string RequestId, string Text, bool? CaseSensitive = null, bool? WholeWord = null, bool? Regex = null, string? In = null,
@@ -619,7 +653,7 @@ internal sealed record BackupSetDto(string Id, string Name, string Type, string 
 internal sealed record BackupFileDto(string Logical, string Physical, string Type, long SizeBytes, int FileId, string? Filegroup = null, bool? Absent = null);
 /// <summary>A database a restore can overwrite: Sessions in it and WithTransaction of them with an open transaction (critic A7), with VIEW SERVER STATE.</summary>
 internal sealed record RestoreDestinationDto(string Name, int Id, string Created, string State, string RecoveryModel, int? Sessions = null, int? WithTransaction = null, string? FamilyGuid = null);
-internal sealed record RestoreServerFileDto(string Database, string Path);
+internal sealed record RestoreServerFileDto(string Database, string Path, string? Logical = null);
 internal sealed record RestoreServerDto(string Separator, bool CanRestore, List<RestoreDestinationDto> Destinations, bool DestinationsTruncated, List<RestoreServerFileDto> Files, bool FilesTruncated,
     string? DataPath = null, string? LogPath = null, string? BackupPath = null);
 internal sealed record RestoreModelDto(RestoreServerDto? Server = null, List<string>? HistoryDatabases = null, bool? HistoryTruncated = null, List<BackupSetDto>? Sets = null,
@@ -735,19 +769,26 @@ internal sealed record LanguageParseArgs(string Text);
 /// keeps the names that start with it (case ignored); Exact keeps the one name it resolves to; Details adds columns' descriptions.
 /// </summary>
 internal sealed record LanguageLookupArgs(string ConnectionId, List<LanguageLookupPath> Requests);
-internal sealed record LanguageLookupPath(List<string> Path, string? Prefix = null, bool? Exact = null, int? Limit = null, bool? Details = null);
+internal sealed record LanguageLookupPath(List<string> Path, string? Prefix = null, bool? Exact = null, int? Limit = null, bool? Details = null, string? Mode = null, string? Dataset = null);
 /// <summary>Index is none (never built), building or ready; one answer per request, in order.</summary>
 internal sealed record LanguageLookupResult(string Index, List<LanguageLookupAnswer> Answers);
 /// <summary>State is ready, partial, building, skipped or absent. Path is the request's as the index names it (case resolved) as far
 /// as it resolved. Object is the object a path to one names, when the index holds it. Truncated: more names matched than came back.</summary>
 internal sealed record LanguageLookupAnswer(string State, List<string> Path, List<LanguageLookupItem> Items, bool Truncated, LanguageLookupObject? Object = null, string? Skip = null);
 /// <summary>A name below the path: its kind and subtype as Object Explorer names them, a column's type and nullability, a routine's
-/// signature (Detail), a sharded group, and with Details a column's description.</summary>
+/// signature (Detail), a sharded group, project tier/completeness flags, summary metadata, jump coordinates, and with Details a column or object's description.</summary>
 internal sealed record LanguageLookupItem(string Name, string Kind, string? Subtype = null, string? Type = null, bool? Nullable = null, string? Detail = null,
-    string? Description = null, BigQueryShardsDto? Shards = null);
+    string? Description = null, BigQueryShardsDto? Shards = null, string? Tier = null, bool? NamesOnly = null, bool? Partial = null,
+    long? Rows = null, long? Bytes = null, string? Partitioning = null, string? Clustering = null,
+    bool? Recent = null, bool? Indexing = null, string? Project = null, string? Dataset = null);
 /// <summary>An object's facts: Detailed is false until the index has read its details (columns, size, layout).</summary>
 internal sealed record LanguageLookupObject(string Name, string Kind, string? Subtype, bool Detailed, long? Rows = null, long? Bytes = null, string? Partitioning = null,
-    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null);
+    string? Clustering = null, string? Signature = null, BigQueryShardsDto? Shards = null, bool? ColumnsCut = null, DateTime? Modified = null, string? Description = null);
+/// <summary>language.hydrate: free on-demand REST tables.get / routines.get hydration of referenced BigQuery objects into the in-memory index under the shared memory budget.</summary>
+internal sealed record LanguageHydrateTarget(string Project, string Dataset, string Name, string? Kind = null, bool? AllowExternal = null);
+internal sealed record LanguageHydrateArgs(string ConnectionId, List<LanguageHydrateTarget> Targets);
+internal sealed record LanguageHydrateOutcome(string Project, string Dataset, string Name, string Status, string? Code = null);
+internal sealed record LanguageHydrateResult(List<LanguageHydrateOutcome> Outcomes);
 internal sealed record LanguageParseError(int Line, int Column, int Number, string Message);
 internal sealed record LanguageParseResult(IReadOnlyList<LanguageParseError> Errors, bool Truncated);
 /// <summary>One step's whole content (src/shared/agent/steps.ts AgentStepWrite): strings '' for none, ProxyId 0 for the service account.</summary>
@@ -1196,7 +1237,7 @@ internal sealed record SsisExecutionParameterDto(int ObjectType, string Name, st
 /// <summary>SsisPackageRun in src/shared/ssis/schema.ts.</summary>
 internal sealed record SsisPackageRunDto(long Id, int Status, string? Created, string? Started, string? Ended, string? Caller = null, long? Errors = null, long? Warnings = null);
 internal sealed record SsisExecutionModel(SsisExecutionOverviewDto Overview, List<SsisMessageCountDto> Counts, List<int>? Types, string? Source, List<SsisExecutionMessageDto> Messages, bool Truncated,
-    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer);
+    List<SsisExecutionTaskDto> Tasks, bool TasksTruncated, List<SsisExecutionParameterDto> Parameters, List<SsisPackageRunDto> Runs, long? Newer, SsisExecutionMessageDto? FirstError = null);
 internal sealed record SsisExecutionResult(SsisExecutionModel? Model, long ElapsedMs, SsisError? Error = null);
 /// <summary>ssis.packageRuns (src/shared/ssis/schema.ts SsisPackageRunsRequest): one package's newest runs.</summary>
 internal sealed record SsisPackageRunsArgs(string ConnectionId, string RequestId, string Folder, string Project, string Package);

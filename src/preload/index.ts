@@ -63,6 +63,8 @@ const api: VariaApi = {
     return () => { ipcRenderer.removeListener('varia:connection-bindings-changed', listener) }
   },
   clearEntraTokenCache: () => ipcRenderer.invoke('varia:entra-cache-clear'),
+  clearSavedSearchIndexes: () => ipcRenderer.invoke('varia:index-store-clear'),
+  searchIndexStorage: () => ipcRenderer.invoke('varia:index-store-storage'),
   discoverServers: scope => request('connections.discover', { scope }),
   previewConnection: options => request('connections.preview', options),
   loadConnectionLibrary: () => ipcRenderer.invoke('varia:connections-load'),
@@ -90,6 +92,7 @@ const api: VariaApi = {
   explorerChildren: params => request('explorer.children', params),
   explorerCancel: requestIds => ipcRenderer.invoke('varia:explorer-cancel', { requestIds }),
   explorerIndex: params => request('explorer.index', params),
+  explorerIndexStatus: params => request('explorer.indexStatus', params),
   explorerSearch: params => request('explorer.search', params),
   explorerPeek: params => request('explorer.peek', params),
   explorerPeekDependencies: params => request('explorer.peekDependencies', params),
@@ -98,7 +101,9 @@ const api: VariaApi = {
   // Only the known progress fields cross to the page, whatever main sent.
   onExplorerIndexProgress: callback => {
     const listener = (_event: Electron.IpcRendererEvent, progress: ObjectIndexProgress) => callback({
-      requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {}
+      requestId: progress.requestId, done: progress.done, total: progress.total, objects: progress.objects, ...progress.phase ? { phase: progress.phase } : {},
+      ...progress.growing === true ? { growing: true as const } : {}, ...progress.throttled === true ? { throttled: true as const } : {},
+      ...typeof progress.savedAt === 'string' ? { savedAt: progress.savedAt } : {}, ...progress.full === true ? { full: true as const } : {}
     })
     ipcRenderer.on('varia:explorer-index-progress', listener)
     return () => { ipcRenderer.removeListener('varia:explorer-index-progress', listener) }
@@ -126,6 +131,7 @@ const api: VariaApi = {
   agentErrorLogs: params => request('agent.errorLogs', params),
   languageParse: params => request('language.parse', params),
   languageLookup: params => request('language.lookup', params),
+  languageHydrate: params => request('language.hydrate', params),
   cancelSsis: requestIds => ipcRenderer.invoke('varia:ssis-cancel', { requestIds }),
   activityDetails: params => request('activity.details', params),
   activityKill: params => request('activity.kill', params),

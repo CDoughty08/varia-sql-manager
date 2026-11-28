@@ -5,6 +5,7 @@ import {
   jobHistoryDetailsSchema, qualifiedJobId, type JobHistoryDetails, type JobHistoryRow
 } from '../src/shared/bigquery/history'
 import { jobsByProject, jobsUnavailableText } from '../src/shared/bigquery/jobs'
+import { isPerimeterRefusal, isPermissionRefusal, perimeterOpening } from '../src/shared/bigquery/errors'
 import { optionsAllow } from '../src/shared/ipc/methods'
 import { liveArgsSchemas } from '../src/shared/live/schema'
 import { commandDescriptor } from '../src/shared/commands/catalog'
@@ -140,6 +141,18 @@ describe('Job History rules', () => {
     expect(cancelNotice(row(), { ok: true, value: { cancelled: true, state: 'done' } })).toEqual({ tone: 'info', text: jobHistoryText.cancelDone('job_1') })
     expect(cancelNotice(row(), { ok: true, value: { cancelled: true, state: 'cancelled' } })).toEqual({ tone: 'info', text: jobHistoryText.cancelled('job_1') })
     expect(cancelNotice(row({ mine: false }), { ok: false, error: 'No.', code: 'PERMISSION_DENIED' }).text).toBe(jobHistoryText.cancelDenied('No.'))
+    // VPC Service Controls' refusal is no missing permission: its text stands without the bigquery.jobs.update advice.
+    const fenced = `${perimeterOpening}: the organization's service perimeter does not allow it from this network or account.`
+    expect(cancelNotice(row({ mine: false }), { ok: false, error: fenced, code: 'PERMISSION_DENIED' }).text).toBe(jobHistoryText.cancelFailed(fenced))
+  })
+  it('tells VPC Service Controls refusals apart by the opening the backend gives it', () => {
+    const backend = readFileSync('backend/Varia.Backend/BigQuery/BigQueryErrors.cs', 'utf8')
+    expect(backend).toContain(`PerimeterOpening = "${perimeterOpening}"`)
+    expect(isPerimeterRefusal('PERMISSION_DENIED', `${perimeterOpening}: …`)).toBe(true)
+    expect(isPermissionRefusal('PERMISSION_DENIED', `${perimeterOpening}: …`)).toBe(false)
+    expect(isPerimeterRefusal('QUOTA', `${perimeterOpening}: …`)).toBe(false)
+    expect(isPermissionRefusal('PERMISSION_DENIED', 'The account lacks the bigquery.jobs.get permission.')).toBe(true)
+    expect(isPermissionRefusal('NOT_FOUND', 'Not found.')).toBe(false)
   })
   it('hold the same bounds as the backend\'s BigQueryJobHistory', () => {
     const backend = readFileSync('backend/Varia.Backend/BigQuery/BigQueryJobHistory.cs', 'utf8')
@@ -286,7 +299,7 @@ describe('Job History documents', () => {
     expect(restore).toHaveBeenCalledTimes(1)
   })
   it('open the job\'s whole SQL in a new tab, and Re-run executes it there unless the SQL was cut', async () => {
-    const { service, grid, api, queries, documents } = history()
+    const { service, grid, api, queries, documents, results } = history()
     const id = service.open('bq1')
     service.attachGrid(id, grid as unknown as LiveGrid)
     grid.select(cells({ mine: '0', user: 'ben@example.com' }))
@@ -307,6 +320,17 @@ describe('Job History documents', () => {
     api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ dataset: 'other-project.sales' }) })
     await service.openSql(id, false)
     expect(documents.active).toMatchObject({ database: '' })
+    // Re-run of a job whose default dataset was in another project opens without executing, so unqualified names never hit the connection's default dataset.
+    documents.activate(id)
+    api.bigQueryJob.mockResolvedValueOnce({ ok: true, value: details({ sql: 'SELECT amount FROM invoices', dataset: 'external-prod.finance_archive' }) })
+    await service.openSql(id, true)
+    service.answerConfirm(id, true)
+    await settled()
+    expect(documents.active).toMatchObject({ database: '' })
+    expect(documents.getModel(documents.active!.id)?.getValue()).toBe('SELECT amount FROM invoices')
+    expect(execute).not.toHaveBeenCalled()
+    expect(service.get(id)?.notice).toEqual({ tone: 'info', text: jobHistoryText.externalDataset('external-prod.finance_archive') })
+    expect(results.getSnapshot()[documents.active!.id]?.messages.map(message => message.text)).toContain(jobHistoryText.externalDataset('external-prod.finance_archive'))
     // Re-run of another user's job asks first, naming the job and its user; the tab opens and runs only on Re-run.
     documents.activate(id)
     const tabs = documents.getSnapshot().documents.length
@@ -328,6 +352,13 @@ describe('Job History documents', () => {
     await settled()
     expect(execute).toHaveBeenCalledTimes(1)
     expect(service.get(id)?.notice?.text).toBe(jobHistoryText.sqlTruncated)
+    // VPC Service Controls refusing the read is no refused permission: its text stands, and nothing is remembered.
+    documents.activate(id)
+    const fenced = `${perimeterOpening}: the organization's service perimeter does not allow it from this network or account.`
+    api.bigQueryJob.mockResolvedValue({ ok: false, error: fenced, code: 'PERMISSION_DENIED' })
+    await service.openSql(id, false)
+    expect(service.get(id)?.notice).toMatchObject({ tone: 'error', text: fenced })
+    expect(service.actionState(id, 'openSql').enabled).toBe(true)
     // A refused read of another user's job is remembered: Open SQL is then greyed with the reason.
     documents.activate(id)
     api.bigQueryJob.mockResolvedValue({ ok: false, error: 'Access Denied.', code: 'PERMISSION_DENIED' })

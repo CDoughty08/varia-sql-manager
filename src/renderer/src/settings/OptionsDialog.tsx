@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react'
-import { pageById, pagePath, settingPages, type SettingKey } from '../../../shared/settings/catalog'
+import { pageById, pagePath, settingPages, visibleSettings, type SettingDef, type SettingKey } from '../../../shared/settings/catalog'
 import { defaultThemePreference } from '../../../shared/theme/format'
 import { builtinThemes } from '../../../shared/theme/palette'
 import { resolveBuiltin } from '../../../shared/theme/resolve'
@@ -14,11 +14,13 @@ import { followPointerDrag } from '../kit/pointer-drag'
 import DialogWindow, { closesDialogWindow, DialogHeading } from '../popouts/DialogWindow'
 import { trapFocus } from '../trap-focus'
 import {
-  ancestorIds, clampOptionsRailWidth, commitOptions, customizedSettings, draftFrom, followValues, firstPage, loadOptionsRailWidth,
+  ancestorIds, clampOptionsRailWidth, commitOptions, draftFrom, followValues, firstPage, loadOptionsRailWidth,
   optionsRailLimits, pageForm, patchFrom, pendingSettingsCount, resetPage, resetSetting, rowNotes, saveOptionsRailWidth, setDraftValue,
-  settingGridRow, settingRow, themePatchFrom, themePreferenceChanged, treeRows, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
+  settingGridRow, settingRow, themePatchFrom, themePreferenceChanged, treeRows, unsavedSettings, validateDraft, type OptionsDraft, type RowGroup, type SettingRow
 } from './options-form'
 import PropertyGrid, { controlId } from './PropertyGrid'
+import { indexStorageNote } from './index-storage-note'
+import type { SecretStorageState } from '../../../shared/connections'
 import { highlightParts, normalizeQuery, searchAllOptions } from './search'
 import { focusToReturn, isElement, returnFocusBeside } from '../core/focus'
 import { useShortcuts, useShortcutsSnapshot } from '../core/ShortcutsContext'
@@ -66,6 +68,8 @@ interface RowProps {
   onLeave?(): void
   onChange(text: string): void
   onReset?(): void
+  /** In the Modified view every row is an unsaved edit: its button puts back the saved value, not the default. */
+  onRevert?(): void
 }
 
 /** What follows a control in the hint column: an integer's unit, then the setting's hint ("GiB · 0 = automatic"). */
@@ -75,7 +79,7 @@ export const rowHint = (row: SettingRow): string => [row.def.type === 'integer' 
  * A compact single-line form row: label + badges on the left, optional search description snippet only when
  * matching in the description rather than the label, and aligned control + per-row reset on the right.
  */
-function FormRow({ row, error, focused, label, descriptionSnippet, onFocus, onHover, onLeave, onChange, onReset }: RowProps) {
+function FormRow({ row, error, focused, label, descriptionSnippet, onFocus, onHover, onLeave, onChange, onReset, onRevert }: RowProps) {
   const { def } = row, id = controlId(row.key), hint = rowHint(row), isSegmented = def.type === 'enum' && def.presentation === 'radio'
   const common = { id, disabled: row.disabled, 'data-setting': row.key, 'aria-description': [def.description, hint].filter(Boolean).join(' ') || undefined, onFocus }
   let control: ReactNode
@@ -109,7 +113,9 @@ function FormRow({ row, error, focused, label, descriptionSnippet, onFocus, onHo
       {error && <span className="options-field-error" id={id + '-error'}>{error}</span>}
     </div>
     <div className="options-row-controls">
-      {row.changed && onReset && <button type="button" className="ui-button icon-button options-row-reset" aria-label={`Reset ${def.label}`} title={`Reset ${def.label} to default`} tabIndex={-1} onClick={event => { event.stopPropagation(); onReset() }}><Icon name="discard" /></button>}
+      {onRevert
+        ? <button type="button" className="ui-button icon-button options-row-reset" aria-label={`Revert ${def.label}`} title={`Revert ${def.label} to its saved value`} tabIndex={-1} onClick={event => { event.stopPropagation(); onRevert() }}><Icon name="discard" /></button>
+        : row.changed && onReset && <button type="button" className="ui-button icon-button options-row-reset" aria-label={`Reset ${def.label}`} title={`Reset ${def.label} to default`} tabIndex={-1} onClick={event => { event.stopPropagation(); onReset() }}><Icon name="discard" /></button>}
       {control}
     </div>
   </div>
@@ -232,6 +238,14 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     setThemeDraft(current => themePreferenceChanged(current, previous) ? current : next)
   }, [storedTheme])
 
+  // Whether the system can protect the saved Search Objects index: asked when the dialog opens, so its page can say when it cannot.
+  const [indexStorage, setIndexStorage] = useState<SecretStorageState>()
+  useEffect(() => {
+    let live = true
+    void window.varia?.searchIndexStorage?.().then(result => { if (live && result.ok) setIndexStorage(result.value) }, () => {})
+    return () => { live = false }
+  }, [])
+
   const shortcuts = useShortcuts()
   const shortcutsState = useShortcutsSnapshot()
   const [shortcutEdit, setShortcutEdit] = useState<ShortcutEdit>(() => startShortcutEdit(shortcuts.getSnapshot()))
@@ -266,18 +280,20 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const [formElement, setForm] = useState<HTMLFormElement | null>(null)
 
   const searchResult = useMemo(() => searchAllOptions(query, platform), [query, platform])
-  const customizedList = useMemo(() => customizedSettings(draft, platform), [draft, platform])
-  const customizedSet = useMemo(() => new Set(customizedList.map(def => def.key as SettingKey)), [customizedList])
-  const customizedTheme = !!themeState && themePreferenceChanged(themeDraft, defaultThemePreference)
-  const totalCustomized = customizedList.length + (customizedTheme ? 1 : 0) + (stagedShortcuts > 0 ? 1 : 0)
+  // Modified means edited here and not saved yet: values saved earlier, in Options or elsewhere, are not called out.
+  const stored = useMemo(() => draftFrom(values), [values])
+  const unsavedList = useMemo(() => unsavedSettings(draft, stored, platform), [draft, stored, platform])
+  const unsavedSet = useMemo(() => new Set(unsavedList.map(def => def.key as SettingKey)), [unsavedList])
+  const unsavedTheme = !!themeState && themePreferenceChanged(themeDraft, storedTheme)
+  const totalUnsaved = unsavedList.length + (unsavedTheme ? 1 : 0) + (stagedShortcuts > 0 ? 1 : 0)
 
   const pageCounts = useMemo(() => {
     const counts = new Map<string, number>()
     if (searchResult) {
       for (const entry of searchResult.pages) {
         const filtered = modifiedOnly
-          ? entry.settings.filter(def => customizedSet.has(def.key as SettingKey)).length
-            + (entry.matchTheme && customizedTheme ? 1 : 0)
+          ? entry.settings.filter(def => unsavedSet.has(def.key as SettingKey)).length
+            + (entry.matchTheme && unsavedTheme ? 1 : 0)
             + (entry.matchShortcuts && stagedShortcuts > 0 ? 1 : 0)
           : entry.count
         if (filtered > 0) counts.set(entry.page.id, filtered)
@@ -287,14 +303,14 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     if (modifiedOnly) {
       for (const node of settingPages) {
         if (!node.layout) continue
-        let count = customizedList.filter(def => def.page === node.id).length
-        if (node.provider === 'theme' && customizedTheme) count++
+        let count = unsavedList.filter(def => def.page === node.id).length
+        if (node.provider === 'theme' && unsavedTheme) count++
         if (node.layout === 'shortcuts' && stagedShortcuts > 0) count += stagedShortcuts
         if (count > 0) counts.set(node.id, count)
       }
     }
     return counts
-  }, [searchResult, modifiedOnly, customizedList, customizedSet, customizedTheme, stagedShortcuts])
+  }, [searchResult, modifiedOnly, unsavedList, unsavedSet, unsavedTheme, stagedShortcuts])
 
   const shownTree = useMemo(() => {
     if (!searchResult && !modifiedOnly) return undefined
@@ -306,9 +322,13 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const rows = treeRows(expanded, shownTree)
   const focusId = rows.some(row => row.page.id === treeFocus) ? treeFocus : rows.find(row => row.page.id === page)?.page.id ?? rows[0]?.page.id
   const form = pageForm(page, draft, platform)
+  const indexStorageText = indexStorageNote(indexStorage, draft['objectExplorer.search.saveIndex'] === true, draft['objectExplorer.search.saveUnencrypted'] === true)
   const shownRows = form.groups.flatMap(group => group.rows)
   const showingUnified = browseScope === 'all' && (!!searchResult || modifiedOnly)
 
+  // The Modified view keeps the row being edited even once it matches the saved value again, so typing or toggling it
+  // back does not pull the row (and focus) out from under the user; it leaves when focus moves or it is reverted.
+  const inModifiedView = (def: SettingDef) => unsavedSet.has(def.key as SettingKey) || def.key === focused
   const unifiedEntries = useMemo(() => {
     if (!showingUnified) return []
     const items: {
@@ -320,8 +340,8 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     }[] = []
     if (searchResult) {
       for (const entry of searchResult.pages) {
-        const list = modifiedOnly ? entry.settings.filter(def => customizedSet.has(def.key as SettingKey)) : entry.settings
-        const showTheme = entry.matchTheme && (!modifiedOnly || customizedTheme)
+        const list = modifiedOnly ? entry.settings.filter(inModifiedView) : entry.settings
+        const showTheme = entry.matchTheme && (!modifiedOnly || unsavedTheme)
         const showShortcuts = entry.matchShortcuts && (!modifiedOnly || stagedShortcuts > 0)
         if (!list.length && !showTheme && !showShortcuts) continue
         items.push({ pageId: entry.page.id, path: entry.path, settings: list.map(def => settingRow(def, draft)), showTheme, showShortcuts })
@@ -330,14 +350,14 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     }
     for (const node of settingPages) {
       if (!node.layout) continue
-      const list = customizedList.filter(def => def.page === node.id)
-      const showTheme = node.provider === 'theme' && customizedTheme
+      const list = visibleSettings(platform).filter(def => def.page === node.id && inModifiedView(def))
+      const showTheme = node.provider === 'theme' && unsavedTheme
       const showShortcuts = node.layout === 'shortcuts' && stagedShortcuts > 0
       if (!list.length && !showTheme && !showShortcuts) continue
       items.push({ pageId: node.id, path: pagePath(node.id).map(item => item.title).join(' › '), settings: list.map(def => settingRow(def, draft)), showTheme, showShortcuts })
     }
     return items
-  }, [showingUnified, searchResult, modifiedOnly, customizedSet, customizedTheme, stagedShortcuts, draft, customizedList])
+  }, [showingUnified, searchResult, modifiedOnly, unsavedSet, unsavedTheme, stagedShortcuts, draft, focused, platform])
 
   const pendingSettings = pendingSettingsCount(values, draft)
   const themePatch = themeState ? themePatchFrom(storedTheme, themeDraft) : undefined
@@ -417,6 +437,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
     const next = !modifiedOnly
     setModifiedOnly(next)
     setBrowseScope(next || query.trim() ? 'all' : 'page')
+    setFocused(undefined)
     setHovered(undefined)
     setConfirmClose(false)
   }
@@ -439,6 +460,12 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
   const change = (key: SettingKey, text: string) => {
     setDraft(current => setDraftValue(current, key, text))
     setErrors(current => { if (!current.has(key)) return current; const next = new Map(current); next.delete(key); return next })
+    setError(''); setAppliedNotice(false); setConfirmClose(false)
+  }
+  const revertOneSetting = (key: SettingKey) => {
+    setDraft(current => current[key] === stored[key] ? current : { ...current, [key]: stored[key] })
+    setErrors(current => { if (!current.has(key)) return current; const next = new Map(current); next.delete(key); return next })
+    setFocused(current => current === key ? undefined : current)
     setError(''); setAppliedNotice(false); setConfirmClose(false)
   }
   const resetOneSetting = (key: SettingKey) => {
@@ -620,7 +647,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
           </div>
           <div className="options-nav-filters">
             <button type="button" className="chip options-modified-pill" aria-pressed={modifiedOnly} onClick={toggleModified}>
-              Modified ({totalCustomized})
+              Modified ({totalUnsaved})
             </button>
           </div>
         </div>
@@ -629,7 +656,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
           : <ul ref={tree} className="options-pages" role="tree" aria-label="Options pages" onKeyDown={treeKeyDown}>
             {rows.map(row => {
               const count = pageCounts.get(row.page.id)
-              const hasMod = customizedList.some(def => def.page === row.page.id) || (row.page.id === 'environment.general' && customizedTheme) || (row.page.id === shortcutsPage && stagedShortcuts > 0)
+              const hasMod = unsavedList.some(def => def.page === row.page.id) || (row.page.id === 'environment.general' && unsavedTheme) || (row.page.id === shortcutsPage && stagedShortcuts > 0)
               return <li key={row.page.id} role="treeitem" aria-label={row.page.title} aria-level={row.level} aria-expanded={row.expandable ? row.expanded : undefined} aria-selected={!showingUnified && row.page.id === page}
                 tabIndex={row.page.id === focusId ? 0 : -1} data-page={row.page.id} data-count={count ? String(count) : undefined} data-modified={hasMod || undefined}
                 style={{ paddingLeft: 4 + (row.level - 1) * 14 }}
@@ -648,7 +675,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
             <span className="options-title">{searchResult ? 'Search Results' : 'Modified Settings'}</span>
           </h3>
           {unifiedEntries.length === 0
-            ? <p className="options-empty" role="status">{query.trim() ? 'No settings match.' : 'No customized settings or shortcuts yet.'}</p>
+            ? <p className="options-empty" role="status">{query.trim() ? 'No settings match.' : 'No unsaved changes.'}</p>
             : <div className="options-form options-search-results">
               {unifiedEntries.map(entry => <div key={entry.pageId} className="options-search-group">
                 <button type="button" className="options-search-crumb" onClick={() => showPage(entry.pageId)}>{entry.path} ›</button>
@@ -656,7 +683,8 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
                 {entry.settings.length > 0 && <div className="options-grid">
                   {entry.settings.map(row => <FormRow key={row.key} row={row} error={errors.get(row.key)} focused={row.key === focused} label={highlight(row.def.label)} descriptionSnippet={snippetFor(row)}
                     onFocus={() => setFocused(row.key)} onHover={() => setHovered(row.key)} onLeave={() => setHovered(current => current === row.key ? undefined : current)}
-                    onChange={text => change(row.key, text)} onReset={() => resetOneSetting(row.key)} />)}
+                    onChange={text => change(row.key, text)} onReset={() => resetOneSetting(row.key)}
+                    onRevert={modifiedOnly && unsavedSet.has(row.key) ? () => revertOneSetting(row.key) : undefined} />)}
                 </div>}
                 {entry.showShortcuts && <div className="options-shortcut-hit">
                   <span>Keyboard and mouse shortcuts ({stagedShortcuts ? `${stagedShortcuts} staged` : 'Open page to search or assign keys'})</span>
@@ -670,6 +698,7 @@ export default function OptionsDialog({ page: requested, setting }: { page?: str
           </div>}
           <h3 className="options-heading">{ancestors && <span className="options-crumb">{ancestors}<span className="visually-hidden"> › </span></span>}<span className="options-title">{form.page.title}</span></h3>
           {form.page.layout === 'form' && form.page.description && <p className="options-note">{highlight(form.page.description)}</p>}
+          {form.page.id === 'objectExplorer.commands' && indexStorageText && <p className="options-note" data-tone="warning" role="note"><Icon name="warning" /><span>{indexStorageText}</span></p>}
           {form.page.layout === 'shortcuts'
             ? <ShortcutsPage draft={shortcutDraft} stored={shortcutEdit.base.file} platform={platform} files={shortcuts} capture={capture} linked={linked}
               salvaged={shortcutsState.salvaged ? shortcutsState.notice ?? '' : undefined} onChange={next => { setShortcutDraft(next); setError(''); setAppliedNotice(false); setConfirmClose(false) }} />

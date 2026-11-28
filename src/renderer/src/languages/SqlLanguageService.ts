@@ -1,6 +1,9 @@
 import type * as Monaco from 'monaco-editor/editor/editor.api.js'
 import type { VariaApi } from '../../../shared/contracts'
+import { escapeMarkdown, sqlObjectMarkdown } from '../../../shared/completion/hover'
+import { LookupCache } from '../../../shared/completion/lookup-cache'
 import { languageLimits, type DatabaseProviderId, type LanguageContext, type LanguageRange, type LanguageRequest, type LanguageStatus, type LanguageDiagnosticResult, type LanguageDefinition, type LanguageCompletionItem } from '../../../shared/language-service'
+import { languageLookupLimits, type LanguageLookupPath } from '../../../shared/language-lookup'
 import { SnapshotStore } from '../core/store'
 import type { Disposable } from '../core/types'
 import { isQueryDocument } from '../documents'
@@ -9,9 +12,23 @@ import type { DocumentService } from '../services/documents'
 import type { ConnectionService } from '../services/connections'
 import { isLiveConnection } from '../services/connection-availability'
 import type { BackendStateService } from '../services/backend'
+import type { IndexStateStore } from './IndexCompletionService'
 import { definitionErrors } from './definition'
 
-type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics' | 'languageDefinition'>>
+type LanguageApi = Pick<VariaApi, 'languageStatus' | 'languageComplete' | 'languageHover' | 'languageClose' | 'languageRefresh'> & Partial<Pick<VariaApi, 'languageDiagnostics' | 'languageDefinition' | 'languageLookup'>>
+interface SqlResolveMeta {
+  readonly connectionId: string
+  readonly connectionKey: string
+  readonly backendEpoch: number
+  readonly database: string
+  readonly schema: string
+  readonly name: string
+  readonly kind?: number
+}
+const sqlLookupInFlightLimit = 4
+// LSP CompletionItemKind values (1-based) that map to catalog objects in IndexLookup:
+// 2 Method, 3 Function, 7 Class (table/view), 8 Interface (view), 12 Value (sequence), 18 Reference (synonym), 22 Struct (table type).
+const sqlResolvableKinds = new Set<number>([2, 3, 7, 8, 12, 18, 22])
 type CloseResult = Awaited<ReturnType<LanguageApi['languageClose']>>
 type ActivityPhase = 'loading' | 'refreshing'
 interface Snapshot { readonly status?: LanguageStatus; readonly checking: boolean; readonly error?: string; readonly cleanupError?: string; readonly documentErrors: ReadonlyMap<string, string>; readonly activities: ReadonlyMap<string, ActivityPhase> }
@@ -88,9 +105,16 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
   private backendGeneration?: number
   /** The last complete completion answer: one document's at a time, the one being typed in. */
   private completionCache?: CompletionCache
+  /** Per-connection RAM index lookup cache used by `resolveCompletionItem` (~1 ms, zero STS/SQL round-trips). */
+  private readonly lookupCaches = new Map<string, LookupCache>()
+  private readonly indexSignatures = new Map<string, string>()
+  private indexStateBinding?: Disposable
+  private readonly resolveMeta = new WeakMap<Monaco.languages.CompletionItem, SqlResolveMeta>()
+  private lookupInFlight = 0
   constructor(monaco: typeof Monaco, private readonly api: LanguageApi,
-    private readonly documents: DocumentService, private readonly connections: ConnectionService, backend?: BackendStateService) {
+    private readonly documents: DocumentService, private readonly connections: ConnectionService, backend?: BackendStateService, indexState?: IndexStateStore) {
     super({ checking: false, documentErrors: new Map(), activities: new Map() })
+    if (indexState) this.bindIndexState(indexState)
     this.bindings.push(monaco.languages.registerCompletionItemProvider('sql', {
       triggerCharacters: ['.'],
       provideCompletionItems: async (model, position, context, token) => {
@@ -99,10 +123,11 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         if (!capture || capture.peek || token.isCancellationRequested) return { suggestions: [] }
         if (!this.getSnapshot().status && !await this.waitFor(this.readStatus(), token)) return { suggestions: [] }
         if (!this.current(capture, token) || !this.supports(capture, 'completion')) return { suggestions: [] }
+        const resolveContext = this.sqlResolveContext(capture)
         // Every list is returned as incomplete so Monaco asks again as the word grows; a complete backend answer is then
         // re-ranked against the longer word here instead of going back to the backend (see `reuseCompletion`).
         const reused = context.triggerKind === 2 ? reuseCompletion(this.completionCache, capture) : undefined
-        if (reused) return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, reused) }
+        if (reused) return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, reused, resolveContext, this.resolveMeta) }
         this.completionCache = undefined
         const pending = this.begin(`${capture.request.documentId}:completion`, token)
         if (!pending) return { suggestions: [], incomplete: true }
@@ -122,12 +147,13 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           this.failure(capture.request.documentId)
           if (!result.value.isIncomplete) this.completionCache = { model, documentId: capture.request.documentId, key: capture.key, epoch: capture.epoch,
             text: capture.request.text, position: capture.request.position, items: result.value.items }
-          return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, result.value.items) }
+          return { incomplete: true, suggestions: completionSuggestions(monaco, model, position, result.value.items, resolveContext, this.resolveMeta) }
         } catch (error) {
           if (this.current(capture, token)) this.failure(capture.request.documentId, message(error))
           return { suggestions: [] }
         } finally { activity.dispose(); pending.finish(); foreground.dispose() }
-      }
+      },
+      resolveCompletionItem: async (item, token) => this.resolveSuggestion(item, token)
     }), monaco.languages.registerHoverProvider('sql', {
       provideHover: async (model, position, token) => {
         const capture = this.capture(model, position)
@@ -181,6 +207,7 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
           this.backendGeneration = generation
         }
         this.backendEpoch++
+        this.lookupCaches.clear()
         this.statusSequence++
         this.statusRequest = undefined
         this.statusRetryAt = 0
@@ -273,6 +300,10 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
         this.used.add(documentId)
         const backendEpoch = this.backendEpoch
         const result = await this.track(documentId, this.api.languageRefresh({ documentId, version, text, context }))
+        if (context.connectionId) {
+          const conn = this.connections.get(context.connectionId)
+          if (conn) this.lookupCaches.get(`${conn.id}:${conn.generation}`)?.clear()
+        }
         // An edit or a closed query cancels the caller's wait, but an already-dispatched refresh still changes the
         // shared metadata context. Notify sibling models even when the initiating query no longer accepts its result.
         if (!this.disposed && backendEpoch === this.backendEpoch && result.ok && result.value.refreshed) {
@@ -533,6 +564,8 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     })
   }
   private reconcile(): void {
+    const liveKeys = new Set(this.connections.getSnapshot().filter(isLiveConnection).map(conn => `${conn.id}:${conn.generation}`))
+    for (const key of [...this.lookupCaches.keys()]) if (!liveKeys.has(key)) this.lookupCaches.delete(key)
     for (const [id, key] of this.contexts) {
       const next = this.context(id)?.key ?? ''
       const served = this.served(id)
@@ -631,12 +664,109 @@ export class SqlLanguageService extends SnapshotStore<Snapshot> implements Dispo
     for (const cancel of this.waiters) cancel()
     this.refreshing.clear(); this.activities.clear(); this.foreground.clear()
     this.pending.clear()
+    this.indexStateBinding?.dispose()
+    this.indexStateBinding = undefined
+    this.indexSignatures.clear()
     this.bindings.forEach(binding => binding.dispose())
     for (const peek of this.peekModels.values()) peek.disposal.dispose()
     this.peekModels.clear()
     for (const id of this.used) this.close(id)
-    this.used.clear(); this.contexts.clear(); this.epochs.clear(); this.clearListeners()
+    this.used.clear(); this.contexts.clear(); this.epochs.clear(); this.lookupCaches.clear(); this.clearListeners()
     this.publish({ ...this.getSnapshot(), checking: false, activities: new Map() })
+  }
+
+  /** Subscribes to Search Objects' index state store so SQL Server `lookupCaches` clears immediately when builds/refreshes finish. */
+  bindIndexState(store: IndexStateStore): Disposable {
+    this.indexStateBinding?.dispose()
+    this.indexSignatures.clear()
+    if (this.disposed) return { dispose() {} }
+    this.syncIndexes(store)
+    const unsubscribe = store.subscribe(() => this.syncIndexes(store))
+    const binding: Disposable = {
+      dispose: () => {
+        unsubscribe()
+        if (this.indexStateBinding === binding) this.indexStateBinding = undefined
+      }
+    }
+    this.indexStateBinding = binding
+    return binding
+  }
+
+  private syncIndexes(store: IndexStateStore): void {
+    if (this.disposed) return
+    const entries = store.getSnapshot().indexes
+    const seen = new Set<string>()
+    for (const [connectionId, entry] of Object.entries(entries)) {
+      if (!entry) continue
+      seen.add(connectionId)
+      const signature = `${entry.requestId ?? ''}|${entry.status?.state ?? ''}|${entry.status?.builtAt ?? ''}|${entry.status?.objects ?? ''}|${entry.status?.indexed ?? ''}|${entry.error ?? ''}`
+      if (this.indexSignatures.get(connectionId) !== signature) {
+        this.indexSignatures.set(connectionId, signature)
+        this.clearLookupCacheForConnection(connectionId)
+      }
+    }
+    for (const connectionId of [...this.indexSignatures.keys()]) {
+      if (!seen.has(connectionId)) {
+        this.indexSignatures.delete(connectionId)
+        this.clearLookupCacheForConnection(connectionId)
+      }
+    }
+  }
+
+  private clearLookupCacheForConnection(connectionId: string): void {
+    const prefix = `${connectionId}:`
+    for (const [key, cache] of this.lookupCaches) {
+      if (key.startsWith(prefix)) cache.clear()
+    }
+  }
+
+  private sqlResolveContext(capture: Capture): { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string } | undefined {
+    const { connectionId, database, providerId } = capture.request.context
+    if (!this.api.languageLookup || providerId !== 'sqlserver' || !connectionId || !database) return undefined
+    const connection = this.connections.get(connectionId)
+    if (!connection || !isLiveConnection(connection)) return undefined
+    return { connectionId, connectionKey: `${connection.id}:${connection.generation}`, backendEpoch: this.backendEpoch, database }
+  }
+
+  /** Lazy schema preview drawer (`resolveCompletionItem`) for SQL Server: reads local `IndexLookup.cs` RAM index (~1 ms, 0 STS/SQL round-trips). */
+  private async resolveSuggestion(item: Monaco.languages.CompletionItem, token: Monaco.CancellationToken): Promise<Monaco.languages.CompletionItem> {
+    const meta = this.resolveMeta.get(item)
+    if (!meta || !this.api.languageLookup || this.disposed || token.isCancellationRequested) return item
+    if (meta.backendEpoch !== this.backendEpoch) return item
+    const connection = this.connections.get(meta.connectionId)
+    if (!connection || !isLiveConnection(connection) || `${connection.id}:${connection.generation}` !== meta.connectionKey) return item
+    let cache = this.lookupCaches.get(meta.connectionKey)
+    if (!cache) {
+      cache = new LookupCache(async requests => this.askLookup(meta.connectionId, requests))
+      this.lookupCaches.set(meta.connectionKey, cache)
+    }
+    try {
+      const answers = await cache.lookup([{ path: [meta.database, meta.schema, meta.name], limit: languageLookupLimits.items, details: true }])
+      if (this.disposed || token.isCancellationRequested || meta.backendEpoch !== this.backendEpoch) return item
+      const answer = answers?.[0]
+      if (!answer?.object || !sqlKindMatches(meta.kind, answer.object.kind)) return item
+      const markdown = sqlObjectMarkdown(answer.path, answer.object, answer.items, answer.truncated)
+      const existing = typeof item.documentation === 'string'
+        ? item.documentation.trim()
+        : item.documentation?.value?.trim() ?? ''
+      const value = existing
+        ? `${markdown}\n\n---\n\n${typeof item.documentation === 'string' ? existing.split(/\r\n|[\r\n]/).map(line => escapeMarkdown(line)).join('\n') : existing}`
+        : markdown
+      return { ...item, documentation: { value, isTrusted: false, supportHtml: false } }
+    } catch {
+      return item
+    }
+  }
+
+  private async askLookup(connectionId: string, requests: LanguageLookupPath[]) {
+    if (this.disposed || !this.api.languageLookup || this.lookupInFlight >= sqlLookupInFlightLimit) return undefined
+    this.lookupInFlight++
+    try {
+      const result = await this.api.languageLookup({ connectionId, requests })
+      return !this.disposed && result.ok ? result.value : undefined
+    } catch {
+      return undefined
+    } finally { this.lookupInFlight-- }
   }
 }
 
@@ -697,12 +827,186 @@ function unquoteSqlName(value: string): string {
   if (value.startsWith('"')) return (value.length > 1 && value.endsWith('"') ? value.slice(1, -1) : value.slice(1)).replaceAll('""', '"')
   return value
 }
+/** Verifies an IndexLookup object kind is compatible with an STS LSP CompletionItemKind before enriching docs. */
+function sqlKindMatches(lspKind: number | undefined, objectKind: string): boolean {
+  if (lspKind === undefined) return true
+  if (lspKind === 2 || lspKind === 3) return objectKind === 'procedure' || objectKind === 'function'
+  if (lspKind === 7) return objectKind === 'table' || objectKind === 'view' || objectKind === 'tableType' || objectKind === 'synonym'
+  if (lspKind === 8) return objectKind === 'view' || objectKind === 'table' || objectKind === 'tableType'
+  if (lspKind === 12) return objectKind === 'sequence' || objectKind === 'tableType' || objectKind === 'synonym'
+  if (lspKind === 18) return objectKind === 'synonym' || objectKind === 'table' || objectKind === 'view' || objectKind === 'procedure' || objectKind === 'function'
+  if (lspKind === 22) return objectKind === 'tableType' || objectKind === 'table' || objectKind === 'view'
+  return false
+}
+
+/** Splits a quoted/unquoted SQL multi-part name (`[dbo].[Orders]`, `[Sales.Orders]`, `db..Orders`) before unquoting each part. */
+function splitSqlSegments(text: string): string[] | undefined {
+  const source = text.trim()
+  if (!source) return undefined
+  const parts: string[] = []
+  let i = 0
+  while (i <= source.length) {
+    while (i < source.length && (source[i] === ' ' || source[i] === '\t')) i++
+    if (i >= source.length) {
+      if (parts.length > 0) return undefined
+      break
+    }
+    if (source[i] === '.') {
+      // Omitted schema in `db..table`
+      if (parts.length === 0) return undefined
+      parts.push('')
+      i++
+      continue
+    }
+    let seg: string
+    if (source[i] === '[') {
+      i++
+      let out = ''
+      let closed = false
+      while (i < source.length) {
+        if (source[i] === ']') {
+          if (source[i + 1] === ']') { out += ']'; i += 2; continue }
+          closed = true; i++; break
+        }
+        out += source[i++]
+      }
+      if (!closed || !out) return undefined
+      seg = out
+    } else if (source[i] === '"') {
+      i++
+      let out = ''
+      let closed = false
+      while (i < source.length) {
+        if (source[i] === '"') {
+          if (source[i + 1] === '"') { out += '"'; i += 2; continue }
+          closed = true; i++; break
+        }
+        out += source[i++]
+      }
+      if (!closed || !out) return undefined
+      seg = out
+    } else {
+      const start = i
+      while (i < source.length && source[i] !== '.' && source[i] !== ' ' && source[i] !== '\t' && source[i] !== '[' && source[i] !== ']' && source[i] !== '"') i++
+      seg = source.slice(start, i)
+      if (!seg) return undefined
+    }
+    parts.push(seg)
+    while (i < source.length && (source[i] === ' ' || source[i] === '\t')) i++
+    if (i >= source.length) break
+    if (source[i] !== '.') return undefined
+    i++
+    if (i >= source.length) return undefined
+  }
+  return parts.length ? parts : undefined
+}
+
+/** Walks backward before `columnIndex` (0-based) on `line` to extract up to 2 SQL qualifier segments (`db.schema.`, `db..`, or `schema.`). */
+function sqlQualifierBefore(line: string, columnIndex: number): string[] {
+  let at = columnIndex - 1
+  while (at >= 0 && (line[at] === ' ' || line[at] === '\t')) at--
+  const parts: string[] = []
+  while (at >= 0 && line[at] === '.' && parts.length < 2) {
+    at--
+    while (at >= 0 && (line[at] === ' ' || line[at] === '\t')) at--
+    if (at < 0) break
+    if (line[at] === '.') {
+      // `db..table`: empty schema segment before the second dot; keep `at` on the first dot so the next pass reads `db`.
+      if (parts.length === 0) {
+        parts.unshift('*')
+        continue
+      }
+      break
+    }
+    if (line[at] === ']') {
+      const end = at
+      at--
+      while (at >= 0) {
+        if (line[at] === ']') {
+          if (at > 0 && line[at - 1] === ']') { at -= 2; continue }
+          break
+        }
+        if (line[at] === '[') break
+        at--
+      }
+      if (at < 0 || line[at] !== '[') break
+      const seg = line.slice(at + 1, end).replaceAll(']]', ']')
+      if (!seg) break
+      parts.unshift(seg)
+      at--
+    } else if (line[at] === '"') {
+      const end = at
+      at--
+      while (at >= 0) {
+        if (line[at] === '"') {
+          if (at > 0 && line[at - 1] === '"') { at -= 2; continue }
+          break
+        }
+        at--
+      }
+      if (at < 0 || line[at] !== '"') break
+      const seg = line.slice(at + 1, end).replaceAll('""', '"')
+      if (!seg) break
+      parts.unshift(seg)
+      at--
+    } else {
+      const end = at + 1
+      while (at >= 0 && /[\w$@#]/.test(line[at])) at--
+      const seg = line.slice(at + 1, end)
+      if (!seg) break
+      parts.unshift(seg)
+    }
+    while (at >= 0 && (line[at] === ' ' || line[at] === '\t')) at--
+  }
+  return parts.length === 1 && parts[0] === '*' ? [] : parts
+}
+
+function sqlMetaForItem(
+  item: LanguageCompletionItem,
+  qualifier: readonly string[],
+  context: { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string }
+): SqlResolveMeta | undefined {
+  if (item.kind !== undefined && !sqlResolvableKinds.has(item.kind)) return undefined
+  const segments = splitSqlSegments(item.label) ?? (item.filterText ? splitSqlSegments(item.filterText) : undefined)
+  if (!segments || segments.length > 3) return undefined
+  const leaf = segments[segments.length - 1]
+  if (!leaf || leaf.startsWith('@') || leaf.startsWith('#')) return undefined
+  let database = context.database
+  let schema = '*'
+  let name = leaf
+  if (qualifier.length >= 2) {
+    if (segments.length !== 1) return undefined
+    database = qualifier[0]
+    schema = qualifier[1]
+  } else if (qualifier.length === 1) {
+    if (segments.length !== 1) return undefined
+    schema = qualifier[0]
+  } else if (segments.length === 2) {
+    if (!segments[0]) return undefined
+    schema = segments[0]
+  } else if (segments.length === 3) {
+    if (!segments[0]) return undefined
+    database = segments[0]
+    schema = segments[1] || '*'
+  }
+  if (!database || !schema || !name) return undefined
+  if (database.length > languageLookupLimits.segmentChars || schema.length > languageLookupLimits.segmentChars || name.length > languageLookupLimits.segmentChars) return undefined
+  return { ...context, database, schema, name, kind: item.kind }
+}
+
 /**
  * Monaco orders suggestions by its fuzzy score before sortText, and that score prefers a case-matching prefix: typing
  * `orders` scores `orders_archive` or a lower-case system view above the table `Orders`. An exact name match, ignoring
  * case and quoting, filters on exactly the typed text, so nothing outscores it, and sorts first among equal scores.
  */
-function completionSuggestions(monaco: typeof Monaco, model: Monaco.editor.ITextModel, position: Monaco.Position, items: readonly LanguageCompletionItem[]): Monaco.languages.CompletionItem[] {
+function completionSuggestions(
+  monaco: typeof Monaco,
+  model: Monaco.editor.ITextModel,
+  position: Monaco.Position,
+  items: readonly LanguageCompletionItem[],
+  resolveContext?: { readonly connectionId: string; readonly connectionKey: string; readonly backendEpoch: number; readonly database: string },
+  resolveMeta?: WeakMap<Monaco.languages.CompletionItem, SqlResolveMeta>
+): Monaco.languages.CompletionItem[] {
   const word = model.getWordUntilPosition(position)
   const range = { startLineNumber: position.lineNumber, endLineNumber: position.lineNumber, startColumn: word.startColumn, endColumn: word.endColumn }
   const line = model.getLineContent(position.lineNumber)
@@ -718,13 +1022,23 @@ function completionSuggestions(monaco: typeof Monaco, model: Monaco.editor.IText
     const quote = typed[0] === '[' || typed[0] === '"' ? typed[0] : undefined
     const bare = item.filterText ?? unquoteSqlName(item.label)
     const filterText = exact ? typed : quote && !bare.startsWith(quote) ? quote + bare : item.filterText
-    return [{ label: item.label, kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
+    const description = item.detail?.trim() || undefined
+    const monacoItem: Monaco.languages.CompletionItem = {
+      label: description ? { label: item.label, description } : { label: item.label },
+      kind: monaco.languages.CompletionItemKind[kindNames[(item.kind ?? 1) - 1] ?? 'Text'],
       detail: item.detail, documentation: item.documentation,
       // Exact matches first, then columns ahead of general SQL names of equal match quality, then the provider's order.
       sortText: `${exact ? '0' : '1'}${item.kind === 5 || item.kind === 10 ? '0' : '1'}:${item.sortText ?? item.label}`,
       filterText,
       insertText: edit?.newText ?? item.insertText ?? item.label,
       insertTextRules: item.insertTextFormat === 2 ? monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet : undefined,
-      range: replace }]
+      range: replace
+    }
+    if (resolveContext && resolveMeta) {
+      const qualifier = sqlQualifierBefore(line, replace.startColumn - 1)
+      const meta = sqlMetaForItem(item, qualifier, resolveContext)
+      if (meta) resolveMeta.set(monacoItem, meta)
+    }
+    return [monacoItem]
   })
 }

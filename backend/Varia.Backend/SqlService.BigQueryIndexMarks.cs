@@ -102,6 +102,8 @@ internal sealed partial class SqlService
         string? dataset, string? sql)
     {
         var text = finished.Configuration?.Query?.Query ?? sql;
+        if (finished.Statistics?.Query?.ReferencedTables is { Count: > 0 } referenced)
+            search.RecordQueriedProjects(connectionId, referenced.Select(table => table.ProjectId).Where(id => !string.IsNullOrEmpty(id))!);
         var deferred = new List<BigQueryChild>();
         var marks = DdlMarks(finished, statement, children, listedAll, project, dataset, text is null || GoogleSqlScanner.MayChangeObjects(text), deferred);
         Record(connectionId, connection, project, marks);
@@ -116,9 +118,18 @@ internal sealed partial class SqlService
     /// a mark on an unindexed project no build would read.</summary>
     private void Record(string connectionId, BigQueryConnection connection, string project, BigQueryIndexMarks marks)
     {
+        var principal = connection.Principal.PrincipalId;
         foreach (var (markProject, markDataset) in marks.Datasets)
+        {
             search.MarkStaleIfTracked(connectionId, connection.Options.Project, markProject, markDataset);
-        if (marks.WholeProject) search.MarkProjectStale(connectionId, project);
+            // The saved files are the principal's, shared with its other connections.
+            search.MarkSavedStale(principal, markProject, markDataset);
+        }
+        if (marks.WholeProject)
+        {
+            search.MarkProjectStale(connectionId, project);
+            search.MarkSavedStale(principal, project, null);
+        }
     }
 
     /// <summary>Reads, in the background, the jobs of a script's DDL statements whose listing named no target (at most

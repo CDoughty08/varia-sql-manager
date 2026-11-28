@@ -7,7 +7,7 @@ import { modalOpen } from '../core/modal'
 import { watchModals } from '../core/windows'
 import Icon from '../Icon'
 import { memoryLevel, memoryTotalLabel, type MemoryUsage, type MemoryUsageService } from './memory'
-import { anyCompressed, indexNerdMetrics, nerdMetrics, panelBytes, resultNames, resultTargets, type ResultTarget } from './memory-details'
+import { anyCompressed, indexNerdMetrics, indexStoreLine, nerdMetrics, panelBytes, resultNames, resultTargets, type ResultTarget } from './memory-details'
 import { IndexDetails, NerdDetails, NerdMetrics } from './NerdMetrics'
 import { SavedTrend } from './SavedTrend'
 
@@ -46,6 +46,7 @@ function Ring({ reading: { feature, percent, level, asRead } }: { reading: Readi
 
 function MemoryRow({ item }: { item: Reading }) {
   const { feature, level, percentage, usedBytes, globalBytes, packed } = item
+  const saved = feature === 'index' && item.store ? indexStoreLine(item.store) : undefined
   // One unit for the row, by its budget: "2.31 GB / 8.00 GB", "92 MB / 512 MB".
   const bytes = panelBytes(globalBytes)
   const available = level !== 'unavailable'
@@ -64,6 +65,10 @@ function MemoryRow({ item }: { item: Reading }) {
         <span className="memory-packed-chip">−{bytes(packed.givenBack)} packed</span> {bytes(packed.logicalBytes)} of rows held in {bytes(packed.memoryBytes)}
       </span>}
       <p>{note ? note + ' ' : ''}{action}</p>
+      {saved && <span className="memory-store" data-store={saved.mode}>
+        <Icon name={saved.icon} /><span className="memory-store-label">Saved on disk</span>
+        {saved.usage && <span className="memory-store-usage">{saved.usage}</span>}<span className="memory-store-state">{saved.state}</span>
+      </span>}
     </>}
   </section>
 }

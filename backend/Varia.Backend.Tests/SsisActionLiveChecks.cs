@@ -244,20 +244,29 @@ internal static class SsisActionLiveChecks
 
         // The preflight reads the operation's row behind a writer: within a 1 s budget it answers TIMEOUT; with its own 25 s, the
         // 10 s lock timeout answers BLOCKED; and a connection lost while it waits says nothing changed. None reaches the catalog.
+        async Task<long?> ReadMsTicksAsync() =>
+            long.TryParse((await exec("SELECT ms_ticks FROM sys.dm_os_sys_info;", null)).Scalar, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value) ? value : null;
         var stops = await StopOperationsAsync(exec, null);
         options.PreflightBudget = TimeSpan.FromSeconds(1);
         SsisExecuteResult timedOut, blocked, lost;
         long blockedMs;
+        long? blockedServerMs;
         string? killed;
         try
         {
-            (timedOut, blocked, blockedMs, lost, killed) = await Holding("operations", "operation_id", async holder =>
+            (timedOut, blocked, blockedMs, blockedServerMs, lost, killed) = await Holding("operations", "operation_id", async holder =>
             {
                 var first = await StopAsync(service, info.Id, target);
                 options.PreflightBudget = new SsisOptions().PreflightBudget;
+                // Sample SQL Server's own ms_ticks around the 10 s lock timeout: on contended Linux containers SQLPAL's
+                // ms_ticks can jump forward relative to the host wall clock, so the lock timeout can expire at 10 s on
+                // SQL Server's clock while fewer than 9 s passed on the host Stopwatch.
+                var beforeTicks = await ReadMsTicksAsync();
                 var waited = Stopwatch.StartNew();
                 var second = await StopAsync(service, info.Id, target);
                 var secondMs = waited.ElapsedMilliseconds;
+                var afterTicks = await ReadMsTicksAsync();
+                var serverMs = beforeTicks is { } t1 && afterTicks is { } t2 ? t2 - t1 : (long?)null;
                 // This run's own write session, ended while its preflight waits. One never seen there is stopped instead, so that a
                 // write waiting on the holder answers (and fails the check) rather than waiting for it.
                 using var stop = new CancellationTokenSource();
@@ -266,17 +275,17 @@ internal static class SsisActionLiveChecks
                 var session = await BlockedSessionAsync(service, requestId, request, exec, holder);
                 if (session is not null) await exec("KILL " + session + ";", null);
                 else stop.Cancel();
-                return (first, second, secondMs, await request, session);
+                return (first, second, secondMs, serverMs, await request, session);
             });
         }
         finally { options.PreflightBudget = new SsisOptions().PreflightBudget; }
         check(timedOut is { Steps: [], Error: { Code: "TIMEOUT", Retryable: true } } && timedOut.Error.Message == "Checking operation " + target + " took longer than 1 seconds. Try again."
-            && blocked is { Steps: [], Error: { Code: "BLOCKED", Retryable: true } } && blockedMs >= 9_000
+            && blocked is { Steps: [], Error: { Code: "BLOCKED", Retryable: true } } && (blockedMs >= 9_000 || blockedServerMs >= 9_000)
             && killed is not null && lost is { Steps: [], Error: { Code: "CONNECTION_LOST", Retryable: true } }
             && lost.Error.Message == "The connection to the server was lost before Varia could stop operation " + target + ", so nothing changed. Try again."
             && await StopOperationsAsync(exec, null) == stops,
             "a preflight behind a writer's lock answers TIMEOUT past its budget, BLOCKED after its 10 s lock timeout, and CONNECTION_LOST saying nothing changed when its connection is lost, "
-            + "before the catalog is asked (" + blockedMs + " ms, session " + (killed ?? "never seen waiting in the preflight") + "): " + Dump(timedOut) + Dump(blocked) + Dump(lost));
+            + "before the catalog is asked (" + blockedMs + " ms wall, " + (blockedServerMs?.ToString(CultureInfo.InvariantCulture) ?? "?") + " ms server, session " + (killed ?? "never seen waiting in the preflight") + "): " + Dump(timedOut) + Dump(blocked) + Dump(lost));
         await exec("EXEC [catalog].[varia_fake_finish] " + target + ", 3;", null);
     }
 

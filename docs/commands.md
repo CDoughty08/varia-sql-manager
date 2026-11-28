@@ -9,7 +9,7 @@ which the editor dispatches: menus show them, but Varia's key dispatcher does no
 "Available when" is the condition under which menus, the toolbar, and the keyboard can run the command; the context
 keys it uses are listed below.
 
-## Commands (465)
+## Commands (475)
 
 ### File
 
@@ -359,6 +359,7 @@ keys it uses are listed below.
 | Search Objects… | `explorer.searchObjects` | — | — | — | `hasConnection` | View › Search Objects…; Object Explorer context menu › Search Objects… |
 | Rebuild Search Index | `explorer.rebuildIndex` | — | — | — | `hasConnection` | — |
 | Stop Indexing | `explorer.stopIndexing` | — | — | — | Always | — |
+| Clear Saved Search Indexes | `explorer.clearSavedIndexes` | — | — | — | Always | — |
 | Reveal in Object Explorer (not in the palette) | `search.revealHit` | — | — | — | `hasConnection` | Search Objects result context menu › Reveal in Object Explorer |
 | Copy Name (not in the palette) | `search.copyName` | Ctrl+C * (`searchHitsFocus`) | Ctrl+C * (`searchHitsFocus`) | ⌘C * (`searchHitsFocus`) | `hasConnection` | Search Objects result context menu › Copy › Name |
 | Copy Schema-Qualified Name (not in the palette) | `search.copySchemaName` | — | — | — | `hasConnection` | Search Objects result context menu › Copy › Schema-Qualified Name |
@@ -479,8 +480,17 @@ keys it uses are listed below.
 | Start Job at Step… | `agentJob.startAtStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Stop Job | `agentJob.stop` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
 | Reload Job | `agentJob.reload` | — | — | — | `backendReady && activeDocumentIsAgentJob` | — |
-| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | — |
-| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `backendReady && activeDocumentIsAgentJob` | — |
+| Move Step Up | `agentJob.moveStepUp` | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Up (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↑ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Move up |
+| Move Step Down | `agentJob.moveStepDown` | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | Alt+Down (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | ⌥↓ (`activeDocumentIsAgentJob && agentStepsFocus && !textInputFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Move down |
+| Edit Step (not in the palette) | `agentJob.editStep` | Enter (`activeDocumentIsAgentJob && agentFlowFocus`) | Enter (`activeDocumentIsAgentJob && agentFlowFocus`) | ↩ (`activeDocumentIsAgentJob && agentFlowFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Edit step |
+| Start Job at This Step (not in the palette) | `agentJob.startAtThisStep` | — | — | — | `backendReady && activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Start job at this step |
+| Make Start Step (not in the palette) | `agentJob.makeStartStep` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Make Start step |
+| Set Step Action (not in the palette) | `agentJob.setStepAction` | — | — | — | `activeDocumentIsAgentJob` | — |
+| On Success… (not in the palette) | `agentJob.pickStepOnSuccess` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On success… (macOS only) |
+| On Failure… (not in the palette) | `agentJob.pickStepOnFailure` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › On failure… (macOS only) |
+| Add Step After (not in the palette) | `agentJob.addStepAfter` | — | — | — | `activeDocumentIsAgentJob` | — |
+| Add Step After… (not in the palette) | `agentJob.pickStepToAdd` | — | — | — | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Add step after… (macOS only) |
+| Delete Step (not in the palette) | `agentJob.deleteStep` | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | Delete (`activeDocumentIsAgentJob && agentFlowFocus`) | ⌘⌫ (`activeDocumentIsAgentJob && agentFlowFocus`), ⌦ (`activeDocumentIsAgentJob && agentFlowFocus`) | `activeDocumentIsAgentJob` | Job step context menu (Steps › Flow) › Delete step |
 | New Alert… | `agent.newAlert` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New Alert… |
 | Alert… (not in the palette) | `agent.newAlertOnAgent` | — | — | — | `backendReady && hasConnection` | Object Explorer context menu › New › Alert… |
 | Open Alert… | `agent.openAlert` | — | — | — | `backendReady && hasConnection` | — |
@@ -1320,7 +1330,48 @@ Right-click a job in Job Activity Monitor's list (a right-click outside the sele
 | `5_history` | View **H**istory | `agent.viewHistory` | Always |
 | `9_view` | Re**f**resh | `agent.refreshJobs` | Always |
 
-## Context keys (216)
+#### Job step context menu (Steps › Flow) (`agent.steps.context`)
+
+Right-click a step in a job document's Steps › Flow view, which selects it, or press Shift+F10 or the context-menu key with a step focused there. Items act on that step; On success, On failure and Add step after list their choices from the draft (on macOS, On success…, On failure… and Add step after… pick from the same lists).
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| `1_edit` | **E**dit step | `agentJob.editStep` | Always |
+| `1_edit` | **S**tart job at this step | `agentJob.startAtThisStep` | Always |
+| `1_edit` | Ma**k**e Start step | `agentJob.makeStartStep` | Always |
+| `2_actions` | **O**n success › | Submenu: Job step context menu › On success | Windows, Linux only |
+| `2_actions` | On success… | `agentJob.pickStepOnSuccess` | macOS only |
+| `2_actions` | On **f**ailure › | Submenu: Job step context menu › On failure | Windows, Linux only |
+| `2_actions` | On failure… | `agentJob.pickStepOnFailure` | macOS only |
+| `3_order` | **A**dd step after › | Submenu: Job step context menu › Add step after | Windows, Linux only |
+| `3_order` | Add step after… | `agentJob.pickStepToAdd` | macOS only |
+| `3_order` | Move **u**p | `agentJob.moveStepUp` | Always |
+| `3_order` | Move do**w**n | `agentJob.moveStepDown` | Always |
+| `4_delete` | **D**elete step | `agentJob.deleteStep` | Always |
+
+#### Job step context menu › On success
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| step actions | Go to the next step (N · name, or none: the job fails) | `agentJob.setStepAction` | Always |
+| step actions | Go to step N: name, one item per other step; the current choice checked | `agentJob.setStepAction` | Always |
+| step actions | Quit the job reporting success, Quit the job reporting failure | `agentJob.setStepAction` | Always |
+
+#### Job step context menu › On failure
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| step actions | Go to the next step (N · name, or none: the job fails) | `agentJob.setStepAction` | Always |
+| step actions | Go to step N: name, one item per other step; the current choice checked | `agentJob.setStepAction` | Always |
+| step actions | Quit the job reporting success, Quit the job reporting failure | `agentJob.setStepAction` | Always |
+
+#### Job step context menu › Add step after
+
+| Group | Item | Command | Shown |
+| --- | --- | --- | --- |
+| step types | One item per step type the server offers (T-SQL, PowerShell, CmdExec, SSIS…) | `agentJob.addStepAfter` | Always |
+
+## Context keys (217)
 
 `static` keys never change while Varia runs, `state` keys follow the open queries and connections, `focus` keys follow
 keyboard focus, and `target` keys describe what a context menu was opened for. "Available when" conditions use only
@@ -1350,6 +1401,7 @@ use focus keys, and context-menu items may also use the target keys of their own
 | `designerFocus` | boolean | focus | Focus is in the active table designer; activePanel is then 'editor'. |
 | `queryBarFocus` | boolean | focus | Focus is in the active query's bar (Execute, Cancel and its server and database lists); activePanel is then 'editor'. |
 | `agentStepsFocus` | boolean | focus | Focus is in a SQL Server Agent job document's Steps section (its list or the selected step's fields, but not its command editor, whose Monaco keeps Alt+Up/Down). |
+| `agentFlowFocus` | boolean | focus | Focus is on the graph of a SQL Server Agent job document's Steps › Flow view, where Enter edits the selected step and Delete deletes it. |
 | `activityMonitorFocus` | boolean | focus | Focus is in the active Activity Monitor; activePanel is then 'editor'. |
 | `documentTabFocus` | boolean | focus | Focus is on a document tab in the strip, or in its rename box; activePanel is then 'editor'. |
 | `peekFocus` | boolean | focus | Focus is in Object Explorer's Peek card, which floats outside every pane (activePanel is then ''). |

@@ -31,6 +31,7 @@ export interface FocusFacts {
   readonly designerFocus: boolean; readonly queryBarFocus: boolean; readonly activityMonitorFocus: boolean; readonly documentTabFocus: boolean
   readonly peekFocus: boolean; readonly peekTabFocus: boolean; readonly peekEditorFocus: boolean; readonly objectInspectorFocus: boolean
   readonly agentStepsFocus: boolean
+  readonly agentFlowFocus: boolean
   readonly messagesFocus: boolean; readonly resultsFocus: boolean; readonly explorerFocus: boolean; readonly explorerTypeAhead: boolean; readonly explorerServerFocus: boolean; readonly optionsDialogFocus: boolean
 }
 /** A table designer's state for its commands: TableDesignerService publishes one per open designer. */
@@ -64,7 +65,7 @@ export interface JobHistoryContextState { readonly byDocument: Readonly<Record<s
 export interface FocusElement { matches(selector: string): boolean; closest(selector: string): { getAttribute(name: string): string | null } | null }
 export interface FocusEditor<E> { getContainerDomNode(): { contains(node: E): boolean }; getId?(): string; hasTextFocus(): boolean }
 
-const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false, agentStepsFocus: false,
+const noFocus: FocusFacts = { editorFocus: false, editorTextFocus: false, inputFocus: false, activePanel: '', outputGridFocus: false, liveGridFocus: false, searchHitsFocus: false, planOutlineFocus: false, designerFocus: false, queryBarFocus: false, activityMonitorFocus: false, documentTabFocus: false, peekFocus: false, peekTabFocus: false, peekEditorFocus: false, objectInspectorFocus: false, agentStepsFocus: false, agentFlowFocus: false,
   messagesFocus: false, resultsFocus: false, explorerFocus: false, explorerTypeAhead: false, explorerServerFocus: false, optionsDialogFocus: false }
 const panels: ReadonlySet<string> = new Set(['explorer', 'editor'])
 
@@ -99,7 +100,9 @@ export function focusFacts<E extends FocusElement>(element: E | null, editor: Fo
     explorerFocus: !!tree, explorerTypeAhead: tree?.getAttribute('data-type-ahead') != null, explorerServerFocus: serverFocused != null && serverFocused !== 'false', optionsDialogFocus: !!element.closest('[data-options-dialog]'),
     // A job document's Steps section (its list and the selected step's editor), where Alt+Up and Alt+Down move the selected step.
     // Not in a step's command editor: Monaco's focused element (native-edit-context) is no input, and Alt+Up/Down are its own there.
-    agentStepsFocus: !!element.closest('[data-agent-steps]') && !element.closest('.monaco-editor')
+    agentStepsFocus: !!element.closest('[data-agent-steps]') && !element.closest('.monaco-editor'),
+    // The Flow view's graph: its steps' accessible tree, which keeps focus while the canvas draws (Enter edits, Delete deletes the step).
+    agentFlowFocus: !!element.closest('[data-agent-flow]')
   }
 }
 
@@ -212,7 +215,7 @@ export function computeContextKeys(inputs: ContextInputs): ContextKeys {
     comparisonExactText: !!active && !!inputs.comparisonToggles?.[active.id]?.exact, comparisonOneRow: !!active && !!inputs.comparisonToggles?.[active.id]?.oneRow, comparisonChangesOnly: !!active && !!inputs.comparisonToggles?.[active.id]?.changesOnly,
     comparisonRowHasPartner: !!active && !!inputs.comparisonToggles?.[active.id]?.partner,
     hasBookmarks: Object.values(inputs.bookmarks ?? {}).some(count => count > 0), activeDocumentHasBookmarks: !!active && (inputs.bookmarks?.[active.id] ?? 0) > 0,
-    anyDocumentDirty: documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
+    anyDocumentDirty: !!documents.unsavedFill || documents.documents.some(document => document.dirty), editorOvertype: !!inputs.overtype, hasRecentFiles: !!inputs.recentFiles, hasRecoveryFiles: !!inputs.recoveryFiles,
     // A query's engine follows its connection (and activePane in Cross-Engine Split); every other document is SQL Server's.
     hasActiveDocument: !!active, activeDocumentProvider: documentProvider(active), activeDocumentIsQuery: isQueryDocument(active), activeDocumentIsMultiServer: isMultiServerDocument(active), activeDocumentCrossFile: isQueryDocument(active) && active?.multiMode === 'cross' && active.crossView === 'file', activeDocumentIsText: isTextDocument(active), activeDocumentIsDesigner: active?.kind === 'tableDesigner', activeDocumentIsSsis: isSsisDocumentKind(active?.kind),
     activeDocumentIsProperties: active?.kind === 'databaseProperties', propertiesChanged: !!properties?.changed, propertiesApplicable: !!properties?.applicable, propertiesApplying: !!properties?.applying,

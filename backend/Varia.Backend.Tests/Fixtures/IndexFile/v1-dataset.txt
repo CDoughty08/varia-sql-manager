@@ -1,0 +1,104 @@
+varia-alpha|sales|varia-alpha/sales|15024|2|1|1|False|False|True||False|False|0:Utc|55|46|True|1552
+0|bqDataset||||sales|...|-1|-1||-|-||sales|5|-||-1|-|-|-
+1|bqTable|bqTables||sales|orders|...|-1|-1||638356832000000000:Utc|-||sales.orders|12|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":1234567,"Bytes":5368709120,"Partitioning":"DAY on placed","Clustering":"customer, region","Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+2|bqColumn|bqColumns|||id|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.id|15|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|-|-
+3|bqColumn|bqColumns|||customer|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.customer|21|{"TypeName":"STRING","TypeSchema":null,"UserTypeId":1,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"STRING"}||-1|-|-|-
+4|bqColumn|bqColumns|||tags|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.tags|17|{"TypeName":"ARRAY\u003CSTRING\u003E","TypeSchema":null,"UserTypeId":2,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"ARRAY\u003CSTRING\u003E"}||-1|-|-|-
+5|bqColumn|bqColumns|||placed|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.placed|19|{"TypeName":"TIMESTAMP","TypeSchema":null,"UserTypeId":3,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":4,"Flags":1,"TypeText":"TIMESTAMP"}||-1|-|-|-
+6|bqColumn|bqColumns|struct||address|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.address|20|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":5,"Flags":1,"TypeText":"STRUCT"}||-1|-|-|-
+7|bqColumn|bqColumns|||address.city|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.address.city|25|{"TypeName":"STRING","TypeSchema":null,"UserTypeId":1,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":6,"Flags":1,"TypeText":"STRING"}||-1|-|-|-
+8|bqColumn|bqColumns|struct||address.geo|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.address.geo|24|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":7,"Flags":1,"TypeText":"STRUCT"}||-1|-|-|-
+9|bqColumn|bqColumns|||address.geo.lat|bqTable.sales.orders.bqTables|1|-1||-|-||sales.orders.address.geo.lat|28|{"TypeName":"FLOAT64","TypeSchema":null,"UserTypeId":5,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":8,"Flags":1,"TypeText":"FLOAT64"}||-1|-|-|-
+10|bqTable|bqTables||sales|events_20260103|...|-1|-1||639029952000000000:Utc|-||sales.events_20260103|21|-||-1|{"Created":1767398400000,"Detailed":true,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|{"Prefix":"events_","Count":3,"First":"20260101","Last":"20260103"}
+11|bqColumn|bqColumns|||event_name|bqTable.sales.events_20260103.bqTables|10|-1||-|-||sales.events_20260103.event_name|32|{"TypeName":"STRING(64)","TypeSchema":null,"UserTypeId":6,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":1,"TypeText":"STRING(64)"}||-1|-|-|-
+12|bqColumn|bqColumns|struct||items|bqTable.sales.events_20260103.bqTables|10|-1||-|-||sales.events_20260103.items|27|{"TypeName":"ARRAY\u003CSTRUCT\u003E","TypeSchema":null,"UserTypeId":7,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"ARRAY\u003CSTRUCT\u003E"}||-1|-|-|-
+13|bqColumn|bqColumns|||items.sku|bqTable.sales.events_20260103.bqTables|10|-1||-|-||sales.events_20260103.items.sku|31|{"TypeName":"STRING","TypeSchema":null,"UserTypeId":1,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"STRING"}||-1|-|-|-
+14|bqTable|bqTables||sales|events_summary|...|-1|-1||638356832000000000:Utc|-||sales.events_summary|20|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":12,"Bytes":4096,"Partitioning":"integer range on bucket","Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+15|bqColumn|bqColumns|||bucket|bqTable.sales.events_summary.bqTables|14|-1||-|-||sales.events_summary.bucket|27|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|021056F9AF0689C320|-
+16|bqColumn|bqColumns|||to_cents|bqTable.sales.events_summary.bqTables|14|-1||-|-||sales.events_summary.to_cents|29|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"INT64"}||-1|-|-|-
+17|bqColumn|bqColumns|struct||customer|bqTable.sales.events_summary.bqTables|14|-1||-|-||sales.events_summary.customer|29|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"STRUCT"}||-1|-|915CF9B48B2BBFE01024|-
+18|bqColumn|bqColumns|||customer.name|bqTable.sales.events_summary.bqTables|14|-1||-|-||sales.events_summary.customer.name|34|{"TypeName":"STRING(80)","TypeSchema":null,"UserTypeId":8,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":4,"Flags":1,"TypeText":"STRING(80)"}||-1|-|-|-
+19|bqColumn|bqColumns|||customer.spend|bqTable.sales.events_summary.bqTables|14|-1||-|-||sales.events_summary.customer.spend|35|{"TypeName":"ARRAY\u003CNUMERIC(10, 2)\u003E","TypeSchema":null,"UserTypeId":9,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":5,"Flags":1,"TypeText":"ARRAY\u003CNUMERIC(10, 2)\u003E"}||-1|-|-|-
+20|bqTable|bqTables||sales|audit_20261399|...|-1|-1||638355968000000000:Utc|-||sales.audit_20261399|20|-||-1|{"Created":1700000000000,"Detailed":false,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+21|bqTable|bqTables||sales|audit_20261398|...|-1|-1||638356832000000000:Utc|-||sales.audit_20261398|20|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":12,"Bytes":4096,"Partitioning":"integer range on bucket","Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+22|bqColumn|bqColumns|||bucket|bqTable.sales.audit_20261398.bqTables|21|-1||-|-||sales.audit_20261398.bucket|27|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|021056F9AF0689C320|-
+23|bqColumn|bqColumns|||to_cents|bqTable.sales.audit_20261398.bqTables|21|-1||-|-||sales.audit_20261398.to_cents|29|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"INT64"}||-1|-|-|-
+24|bqColumn|bqColumns|struct||customer|bqTable.sales.audit_20261398.bqTables|21|-1||-|-||sales.audit_20261398.customer|29|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"STRUCT"}||-1|-|915CF9B48B2BBFE01024|-
+25|bqColumn|bqColumns|||customer.name|bqTable.sales.audit_20261398.bqTables|21|-1||-|-||sales.audit_20261398.customer.name|34|{"TypeName":"STRING(80)","TypeSchema":null,"UserTypeId":8,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":4,"Flags":1,"TypeText":"STRING(80)"}||-1|-|-|-
+26|bqColumn|bqColumns|||customer.spend|bqTable.sales.audit_20261398.bqTables|21|-1||-|-||sales.audit_20261398.customer.spend|35|{"TypeName":"ARRAY\u003CNUMERIC(10, 2)\u003E","TypeSchema":null,"UserTypeId":9,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":5,"Flags":1,"TypeText":"ARRAY\u003CNUMERIC(10, 2)\u003E"}||-1|-|-|-
+27|bqTable|bqTables|snapshot|sales|orders_2024|...|-1|-1||638356832000000000:Utc|-||sales.orders_2024|17|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":12,"Bytes":4096,"Partitioning":"integer range on bucket","Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+28|bqColumn|bqColumns|||bucket|bqTable.sales.orders_2024.bqTables|27|-1||-|-||sales.orders_2024.bucket|24|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|021056F9AF0689C320|-
+29|bqColumn|bqColumns|||to_cents|bqTable.sales.orders_2024.bqTables|27|-1||-|-||sales.orders_2024.to_cents|26|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"INT64"}||-1|-|-|-
+30|bqColumn|bqColumns|struct||customer|bqTable.sales.orders_2024.bqTables|27|-1||-|-||sales.orders_2024.customer|26|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"STRUCT"}||-1|-|915CF9B48B2BBFE01024|-
+31|bqColumn|bqColumns|||customer.name|bqTable.sales.orders_2024.bqTables|27|-1||-|-||sales.orders_2024.customer.name|31|{"TypeName":"STRING(80)","TypeSchema":null,"UserTypeId":8,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":4,"Flags":1,"TypeText":"STRING(80)"}||-1|-|-|-
+32|bqColumn|bqColumns|||customer.spend|bqTable.sales.orders_2024.bqTables|27|-1||-|-||sales.orders_2024.customer.spend|32|{"TypeName":"ARRAY\u003CNUMERIC(10, 2)\u003E","TypeSchema":null,"UserTypeId":9,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":5,"Flags":1,"TypeText":"ARRAY\u003CNUMERIC(10, 2)\u003E"}||-1|-|-|-
+33|bqTable|bqTables||sales|orders_copy|...|-1|-1||638355968000000000:Utc|-||sales.orders_copy|17|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":null,"Whole":false,"ColumnsCut":false,"Listed":null,"Stale":true,"TextLeftOut":true}|-|-
+34|bqColumn|bqColumns|||id|bqTable.sales.orders_copy.bqTables|33|-1||-|-||sales.orders_copy.id|20|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|-|-
+35|bqColumn|bqColumns|||amount|bqTable.sales.orders_copy.bqTables|33|-1||-|-||sales.orders_copy.amount|24|{"TypeName":"NUMERIC(10, 2)","TypeSchema":null,"UserTypeId":10,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"NUMERIC(10, 2)"}||-1|-|48C105A477C133D223|-
+36|bqView|bqViews||sales|daily|...|-1|-1||638356868000000000:Utc|S86:DE7BAB06CF867B08||sales.daily|11|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+37|bqColumn|bqColumns|||day|bqView.sales.daily.bqViews|36|-1||-|-||sales.daily.day|15|{"TypeName":"DATE","TypeSchema":null,"UserTypeId":11,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":1,"TypeText":"DATE"}||-1|-|-|-
+38|bqColumn|bqColumns|||n|bqView.sales.daily.bqViews|36|-1||-|-||sales.daily.n|13|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"INT64"}||-1|-|-|-
+39|bqMaterializedView|bqMaterializedViews||sales|totals|...|-1|-1||638356832000000000:Utc|-||sales.totals|12|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":12,"Bytes":4096,"Partitioning":"integer range on bucket","Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+40|bqColumn|bqColumns|||bucket|bqMaterializedView.sales.totals.bqMaterializedViews|39|-1||-|-||sales.totals.bucket|19|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|021056F9AF0689C320|-
+41|bqColumn|bqColumns|||to_cents|bqMaterializedView.sales.totals.bqMaterializedViews|39|-1||-|-||sales.totals.to_cents|21|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"INT64"}||-1|-|-|-
+42|bqColumn|bqColumns|struct||customer|bqMaterializedView.sales.totals.bqMaterializedViews|39|-1||-|-||sales.totals.customer|21|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"STRUCT"}||-1|-|915CF9B48B2BBFE01024|-
+43|bqColumn|bqColumns|||customer.name|bqMaterializedView.sales.totals.bqMaterializedViews|39|-1||-|-||sales.totals.customer.name|26|{"TypeName":"STRING(80)","TypeSchema":null,"UserTypeId":8,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":4,"Flags":1,"TypeText":"STRING(80)"}||-1|-|-|-
+44|bqColumn|bqColumns|||customer.spend|bqMaterializedView.sales.totals.bqMaterializedViews|39|-1||-|-||sales.totals.customer.spend|27|{"TypeName":"ARRAY\u003CNUMERIC(10, 2)\u003E","TypeSchema":null,"UserTypeId":9,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":5,"Flags":1,"TypeText":"ARRAY\u003CNUMERIC(10, 2)\u003E"}||-1|-|-|-
+45|bqExternalTable|bqExternalTables||sales|landing|...|-1|-1||638356832000000000:Utc|-||sales.landing|13|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":12,"Bytes":4096,"Partitioning":"integer range on bucket","Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":null,"Stale":false,"TextLeftOut":false}|-|-
+46|bqColumn|bqColumns|||bucket|bqExternalTable.sales.landing.bqExternalTables|45|-1||-|-||sales.landing.bucket|20|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":1,"Flags":0,"TypeText":"INT64"}||-1|-|021056F9AF0689C320|-
+47|bqColumn|bqColumns|||to_cents|bqExternalTable.sales.landing.bqExternalTables|45|-1||-|-||sales.landing.to_cents|22|{"TypeName":"INT64","TypeSchema":null,"UserTypeId":0,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":2,"Flags":1,"TypeText":"INT64"}||-1|-|-|-
+48|bqColumn|bqColumns|struct||customer|bqExternalTable.sales.landing.bqExternalTables|45|-1||-|-||sales.landing.customer|22|{"TypeName":"STRUCT","TypeSchema":null,"UserTypeId":4,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":3,"Flags":1,"TypeText":"STRUCT"}||-1|-|915CF9B48B2BBFE01024|-
+49|bqColumn|bqColumns|||customer.name|bqExternalTable.sales.landing.bqExternalTables|45|-1||-|-||sales.landing.customer.name|27|{"TypeName":"STRING(80)","TypeSchema":null,"UserTypeId":8,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":4,"Flags":1,"TypeText":"STRING(80)"}||-1|-|-|-
+50|bqColumn|bqColumns|||customer.spend|bqExternalTable.sales.landing.bqExternalTables|45|-1||-|-||sales.landing.customer.spend|28|{"TypeName":"ARRAY\u003CNUMERIC(10, 2)\u003E","TypeSchema":null,"UserTypeId":9,"SystemTypeId":0,"UserDefinedType":true,"TableType":false,"MaxLength":0,"Precision":0,"Scale":0,"Ordinal":5,"Flags":1,"TypeText":"ARRAY\u003CNUMERIC(10, 2)\u003E"}||-1|-|-|-
+51|bqRoutine|bqRoutines|procedure|sales|refresh_totals|...|-1|-1||638355973000000000:Utc|-||sales.refresh_totals|20|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":"()","Whole":true,"ColumnsCut":false,"Listed":1700000500123,"Stale":false,"TextLeftOut":false}|-|-
+52|bqRoutine|bqRoutines|scalar|sales|to_cents|...|-1|-1||638355974000000000:Utc|S35:18249EC29E44140A||sales.to_cents|14|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":"(dollars NUMERIC) RETURNS INT64","Whole":true,"ColumnsCut":false,"Listed":1700000600000,"Stale":false,"TextLeftOut":false}|-|-
+53|bqRoutine|bqRoutines|procedure|sales|top_customers|...|-1|-1||638355974000000000:Utc|-||sales.top_customers|19|-||-1|{"Created":1700000000000,"Detailed":true,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":"()","Whole":true,"ColumnsCut":false,"Listed":1700000600000,"Stale":false,"TextLeftOut":false}|-|-
+54|bqModel|bqModels||sales|orders_forecast|...|-1|-1||638355975000000000:Utc|-||sales.orders_forecast|21|-||-1|{"Created":1700000000000,"Detailed":false,"Rows":null,"Bytes":null,"Partitioning":null,"Clustering":null,"Signature":null,"Whole":true,"ColumnsCut":false,"Listed":1700000700000,"Stale":false,"TextLeftOut":false}|-|-
+t|S10:579930240E454C00|name
+t|S10:8E365DEF366D4EC5|name
+t|S10:E696691FFBC3DAA3|name
+t|S11:206034364093546C|name
+t|S11:24D6E6D588385741|name
+t|S11:ADA6FB7922232CD9|name
+t|S12:3C962B6C558D6963|name
+t|S13:9A47FC872B8C9E6C|name
+t|S13:A5A9C79BD0BCBA2F|name
+t|S13:F105812D14263681|name
+t|S13:F896F34395F0F413|name
+t|S14:14E32A2F58ECCE70|name
+t|S14:2B6A70A389179453|name
+t|S14:983EAC678D7B6AA6|name
+t|S14:CE01555A546A3E4C|name
+t|S14:F03E9FB30A4F5BC3|name
+t|S14:F203EB26B3FD140C|name
+t|S15:0C76A74CAF23A15E|name
+t|S15:0EA76837F36C55D7|name
+t|S15:C69F52D4A7A049B3|name
+t|S1:481DAF8515FDAE90|name
+t|S21:7057A730DC0D7BB5|name
+t|S2:59A1765984AE1F28|name
+t|S35:18249EC29E44140A|definition
+t|S3:E43EA4B819BE24D9|name
+t|S4:3327BF293105A6DD|name
+t|S4:9356823D44AF95D8|name
+t|S5:0AFBA97328D0DC0E|name
+t|S5:850260F4AA9FB9C0|name
+t|S5:8D7531EF7B155391|name
+t|S5:BC9ED3D70843F307|name
+t|S6:043F4ACEF0C8B642|name
+t|S6:47B075717D034EFE|name
+t|S6:5EF3A9D0DF4EB52C|name
+t|S6:7F72A29073F20EFC|name
+t|S6:8780D93FDF9AF172|name
+t|S6:99F64CACFA1754D8|name
+t|S6:A8F54ED1EB71A839|name
+t|S7:08C77AE6EA50B1DE|name
+t|S7:96AF3FB3FC7508D4|name
+t|S7:FCD1CB096E11D0C7|name
+t|S86:DE7BAB06CF867B08|definition
+t|S8:C31AB23D294E9F39|name
+t|S8:CCB45C9DA724D650|name
+t|S9:057DDB60AF83D1F6|name
+t|S9:6B3362EF3DD316CC|name
+details|12|40|0|0|712|
+facts|14

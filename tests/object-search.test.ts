@@ -8,7 +8,7 @@ import { requestSchemas } from '../src/main/validation'
 import { cancellableRequests } from '../src/main/backend/renderer-requests'
 import { indexProgressRelay } from '../src/main/index-progress'
 import {
-  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes, unindexedKinds, agentSearchKinds,
+  childrenLeftOut, unknownKindBadge, objectIndexParamsSchema, objectIndexStatusParamsSchema, objectIndexProgressEventSchema, objectSearchLimits, objectSearchParamsSchema, searchKindBadge, searchKinds, searchKindTones, searchTypeKinds, searchTypes, unindexedKinds, agentSearchKinds,
   bigQuerySearchKinds, bigQuerySearchVariants, providerSearchKinds, searchHitNames, searchKindFilters,
   type ObjectIndexProgress, type ObjectIndexResult, type ObjectIndexStatus, type ObjectSearchHit, type ObjectSearchResult
 } from '../src/shared/explorer/search'
@@ -20,8 +20,9 @@ import { explorerSearchId, hitServer, mergeAnswers, ObjectSearchService, quickSe
 import { searchHitTarget } from '../src/renderer/src/search/hit-actions'
 import { insertTextFor } from '../src/shared/explorer/refs'
 import { indexSummary, searchHitPath, unindexedServers } from '../src/renderer/src/search/ObjectSearch'
-import { allIndexesSummary, allServersSummary, bigQueryIndexSummary, BigQueryScope, DatabaseScope, groupNote, indexGap, indexIncomplete, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
+import { allIndexesSummary, allServersSummary, bigQueryIndexSummary, BigQueryScope, DatabaseScope, freshnessText, freshnessTitle, groupNote, indexGap, indexIncomplete, indexMemoryNote, indexMemoryShort, indexedCount, KindBadge, listTabStop, moreMatches, searchHitLabel, searchProviders, stopForKey } from '../src/renderer/src/search/SearchPanel'
 import { indexStatusText } from '../src/renderer/src/search/IndexStatus'
+import { settingDef } from '../src/shared/settings/catalog'
 import { kindSpecs, nodeKinds } from '../src/shared/explorer/catalog'
 import { colorKeys } from '../src/shared/theme/registry'
 import { layoutFilters, minimumChips } from '../src/renderer/src/search/filter-layout'
@@ -55,10 +56,24 @@ describe('object search contracts', () => {
     expect(index).toContain(`SearchBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.searchMs / 1000});`)
     expect(index).toContain(`DatabaseBudget { get; set; } = TimeSpan.FromSeconds(${objectSearchLimits.databaseMs / 1000});`)
     expect(index).toContain(`DefinitionChars { get; init; } = ${objectSearchLimits.definitionChars.toLocaleString('en-US').replaceAll(',', '_')};`)
-    expect(index).toContain('MemoryBytes { get; init; } = 512L * 1024 * 1024;')
-    expect(objectSearchLimits.memoryBytes).toBe(512 * 1024 * 1024)
-    expect(index).toContain('NamesReserveBytes { get; init; } = 128L * 1024 * 1024;')
-    expect(objectSearchLimits.namesReserveBytes).toBe(128 * 1024 * 1024)
+    // The memory limit is Options' (objectExplorer.search.memoryLimitMiB): its default and bounds, the names' reserve as a part
+    // of it, and the floors BigQuery's reads keep free, in sixteenths of the limit (multiples of the reserve in C#).
+    const memory = objectSearchLimits.memoryMiB
+    expect(index).toContain(`public const int DefaultMemoryMiB = ${memory.default};`)
+    expect(index).toContain(`public const int MinMemoryMiB = ${memory.min};`)
+    expect(index.replaceAll('_', '')).toContain(`public const int MaxMemoryMiB = ${memory.max};`)
+    expect(index).toContain(`public const int NamesReserveShare = ${objectSearchLimits.namesReserveShare};`)
+    expect(index).toContain('MemoryBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024;')
+    expect(index).toContain('NamesReserveBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024 / NamesReserveShare;')
+    expect(objectSearchLimits.memoryBytes).toBe(memory.default * 1024 * 1024)
+    expect(objectSearchLimits.namesReserveBytes).toBe(objectSearchLimits.memoryBytes / objectSearchLimits.namesReserveShare)
+    expect(index).toContain('BigQueryNamesFloorBytes => NamesReserveBytes + NamesReserveBytes / 2;')
+    expect(index).toContain('BigQueryDetailsFloorBytes => NamesReserveBytes + NamesReserveBytes / 4 * 3;')
+    expect(index).toContain('BigQueryDiscoveredFloorBytes => NamesReserveBytes * 2;')
+    const reserve16 = 16 / objectSearchLimits.namesReserveShare
+    expect(objectSearchLimits.bigQueryFloors).toEqual({ names: reserve16 * 1.5, details: reserve16 * 1.75, discovered: reserve16 * 2 })
+    // The setting offers exactly what the backend accepts.
+    expect(settingDef('objectExplorer.search.memoryLimitMiB')).toMatchObject({ type: 'integer', min: memory.min, max: memory.max, default: memory.default, unit: 'MiB' })
   })
 
   it('indexes every kind Object Explorer lists but the server, return values and the SSIS Catalog\'s', () => {
@@ -138,6 +153,10 @@ describe('object search contracts', () => {
     expect(index({ scope: { project: 'varia-alpha' } })).toBe(true)
     expect(index({ scope: { project: 'varia-alpha' }, missingOnly: true })).toBe(true)
     expect(index({ stale: true })).toBe(true)
+    // The memory limit rides on either engine's build, within the setting's bounds.
+    for (const memoryLimitMiB of [objectSearchLimits.memoryMiB.min, objectSearchLimits.memoryMiB.default, objectSearchLimits.memoryMiB.max]) expect(index({ memoryLimitMiB })).toBe(true)
+    for (const memoryLimitMiB of [objectSearchLimits.memoryMiB.min - 1, objectSearchLimits.memoryMiB.max + 1, 0, -512, 512.5, '512', null])
+      expect(index({ memoryLimitMiB }), String(memoryLimitMiB)).toBe(false)
     for (const bad of [
       { scope: { project: 'varia-alpha' }, stale: true }, { missingOnly: true }, { scope: { project: 'varia-alpha' }, missingOnly: false }, { stale: false }, { scope: { dataset: 'sales' } }, { scope: { project: 'varia-alpha', extra: 1 } }, { scope: { project: 'x' } },
       { extraDetails: true }, { allProjects: 'yes' }, { maxProjects: 0 }, { maxProjects: objectSearchLimits.bigQuery.maxProjectsCap + 1 }, { maxProjects: 1.5 }, { maxProjects: '500' },
@@ -146,6 +165,10 @@ describe('object search contracts', () => {
     ])
       expect(index(bad), JSON.stringify(bad)).toBe(false)
     expect(requestSchemas['explorer.index']).toBe(objectIndexParamsSchema)
+    expect(requestSchemas['explorer.indexStatus']).toBe(objectIndexStatusParamsSchema)
+    expect(objectIndexStatusParamsSchema.safeParse({ connectionId: '00000000-0000-4000-8000-000000000001' }).success).toBe(true)
+    for (const bad of [{}, { connectionId: 'x' }, { connectionId: '00000000-0000-4000-8000-000000000001', requestId: '00000000-0000-4000-8000-000000000002' }])
+      expect(objectIndexStatusParamsSchema.safeParse(bad).success, JSON.stringify(bad)).toBe(false)
     expect(requestSchemas['explorer.search']).toBe(objectSearchParamsSchema)
   })
 
@@ -153,6 +176,7 @@ describe('object search contracts', () => {
     // Both engines: BigQuery's connections are indexed and searched through the same methods.
     expect(methodPolicies['explorer.index']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 0, providers: ['sqlserver', 'bigquery'] })
     expect(methodPolicies['explorer.search']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 15_000, providers: ['sqlserver', 'bigquery'] })
+    expect(methodPolicies['explorer.indexStatus']).toEqual({ kind: 'unary', lane: 'explorer', deadlineMs: 5_000, providers: ['sqlserver', 'bigquery'] })
     const channels = { explorer: 'explorer', scripting: 'scripting', actions: 'actions', ssis: 'ssis', activity: 'activity', connections: 'connections' }
     expect(cancellableRequests('explorer.index', channels)).toBe('explorer')
     expect(cancellableRequests('explorer.search', channels)).toBe('explorer')
@@ -162,8 +186,17 @@ describe('object search contracts', () => {
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30 }).success).toBe(true)
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, phase: 'projects' }).success).toBe(true)
     expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30, phase: 'details' }).success).toBe(true)
-    for (const bad of [{ done: 3, total: 2, objects: 0 }, { done: -1, total: 2, objects: 0 }, { done: 1, total: 2, objects: 1.5 }, { done: 1, total: 2, objects: 0, database: 'x' }, { done: 1, total: 2, objects: 0, phase: 'columns' }])
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 1, total: 2, objects: 30, phase: 'names', growing: true, throttled: true }).success).toBe(true)
+    for (const bad of [{ done: 3, total: 2, objects: 0 }, { done: -1, total: 2, objects: 0 }, { done: 1, total: 2, objects: 1.5 }, { done: 1, total: 2, objects: 0, database: 'x' }, { done: 1, total: 2, objects: 0, phase: 'columns' },
+      { done: 1, total: 2, objects: 0, growing: false }, { done: 1, total: 2, objects: 0, throttled: 'yes' }, { done: 1, total: 2, objects: 0, throttled: null }])
       expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', ...bad }).success).toBe(false)
+  })
+
+  it('accepts a saved index age only as the backend writes it: UTC to the second', () => {
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 9, phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true }).success).toBe(true)
+    expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, full: false }).success).toBe(false)
+    for (const savedAt of ['2026-11-24', '2026-11-24T08:05:09.123Z', '2026-11-24T08:05:09+01:00', '', 42, null, 'saved yesterday'])
+      expect(objectIndexProgressEventSchema.safeParse({ type: 'explorer.index.progress', done: 0, total: 0, objects: 0, savedAt }).success).toBe(false)
   })
 })
 
@@ -206,6 +239,26 @@ describe('main\'s index progress relay', () => {
     relay.event({ ...event(1), phase: 'details' })
     expect(target.pushed[0]).toEqual({ requestId: 'r', done: 1, total: 10, objects: 100, phase: 'details' })
   })
+
+  it('carries a growing total and BigQuery throttling to the window, and leaves both out when absent', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(1), phase: 'names', growing: true, throttled: true })
+    vi.advanceTimersByTime(gap)
+    relay.event({ ...event(2), phase: 'names' })
+    expect(target.pushed).toEqual([
+      { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names', growing: true, throttled: true },
+      { requestId: 'r', done: 2, total: 10, objects: 200, phase: 'names' }])
+  })
+
+  it('carries a saved index age to the window, and leaves it out once nothing loaded is unchecked', () => {
+    const target = window(), relay = indexProgressRelay('r', target)
+    relay.event({ ...event(0, 0), phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true })
+    vi.advanceTimersByTime(gap)
+    relay.event({ ...event(1), phase: 'names', full: true })
+    expect(target.pushed).toEqual([
+      { requestId: 'r', done: 0, total: 0, objects: 0, phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true },
+      { requestId: 'r', done: 1, total: 10, objects: 100, phase: 'names', full: true }])
+  })
 })
 
 const status = (overrides: Partial<ObjectIndexStatus> = {}): ObjectIndexStatus => ({ state: 'ready', databases: 2, indexed: 2, objects: 40, modules: 5, cut: 0, skipped: [], definitions: true, ...overrides })
@@ -217,7 +270,7 @@ class Connections extends SnapshotStore<readonly LiveConnection[]> {
 }
 const connection = (id: string, lost = false) => ({ id, server: 'srv-' + id, database: 'master', serverVersion: '16.0', options: {}, ...lost ? { lost: true } : {} }) as unknown as LiveConnection
 
-function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; allProjects?: boolean; maxProjects?: number; starredProjects?: (connectionId: string) => readonly string[] } = {}) {
+function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; allProjects?: boolean; maxProjects?: number; memoryLimitMiB?: number; starredProjects?: (connectionId: string) => readonly string[] } = {}) {
   const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], search: [] as Parameters<VariaApi['explorerSearch']>[0][], cancel: [] as string[][] }
   const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
   const pendingSearch: ((result: ApiResult<ObjectSearchResult>) => void)[] = []
@@ -239,7 +292,8 @@ function harness(settings: { indexOnConnect?: boolean; definitions?: boolean; al
   // Read from `settings` each time, so a test can change one as Options would.
   const values: Record<string, boolean | number> = { get 'objectExplorer.search.indexOnConnect'() { return settings.indexOnConnect ?? true }, get 'objectExplorer.search.definitions'() { return settings.definitions ?? true },
     get 'objectExplorer.search.bigQueryAccessibleProjects'() { return settings.allProjects ?? true },
-    get 'objectExplorer.search.bigQueryMaxProjects'() { return settings.maxProjects ?? objectSearchLimits.bigQuery.maxProjects } }
+    get 'objectExplorer.search.bigQueryMaxProjects'() { return settings.maxProjects ?? objectSearchLimits.bigQuery.maxProjects },
+    get 'objectExplorer.search.memoryLimitMiB'() { return settings.memoryLimitMiB as number } }
   const listeners = new Set<(event: WorkbenchEvent) => void>()
   const events = { subscribe: (listener: (event: WorkbenchEvent) => void) => { listeners.add(listener); return { dispose: () => { listeners.delete(listener) } } }, emit: (event: WorkbenchEvent) => listeners.forEach(listener => listener(event)) }
   const timers: Timers & { run(): void } = (() => {
@@ -375,6 +429,19 @@ describe('ObjectSearchService', () => {
     service.dispose()
   })
 
+  it('sends Options\' index memory limit with every build, on either engine, as it is when the build starts', () => {
+    const settings = { memoryLimitMiB: 1024 }
+    const { service, calls, connections } = harness(settings)
+    connections.set([connection('a'), { ...connection('bq'), providerId: 'bigquery', options: { provider: 'bigquery', project: 'varia-alpha' } } as unknown as LiveConnection])
+    expect(calls.index.map(call => [call.connectionId, call.memoryLimitMiB])).toEqual([['a', 1024], ['bq', 1024]])
+    // Changed in Options: nothing is sent until the next build, which carries it (a refresh of part of an index too).
+    settings.memoryLimitMiB = 2048
+    expect(calls.index).toHaveLength(2)
+    service.build('a')
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'a', memoryLimitMiB: 2048 })
+    service.dispose()
+  })
+
   it('builds each server\'s index when it connects, with definitions as Options says, and drops it when the server goes', async () => {
     const { service, calls, pendingIndex, connections, emit } = harness({ definitions: false })
     connections.set([connection('a')])
@@ -382,6 +449,16 @@ describe('ObjectSearchService', () => {
     emit({ requestId: 'req1', done: 1, total: 3, objects: 12 })
     emit({ requestId: 'someone-else', done: 9, total: 9, objects: 9 })
     expect(service.getSnapshot().indexes.a).toMatchObject({ requestId: 'req1', done: 1, total: 3, objects: 12 })
+    // A later event without the flags clears them: the build stopped being throttled and its total stopped growing.
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', growing: true, throttled: true })
+    expect(service.getSnapshot().indexes.a).toMatchObject({ growing: true, throttled: true })
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12, phase: 'names', savedAt: '2026-11-24T08:05:09Z', full: true })
+    expect(service.getSnapshot().indexes.a).toMatchObject({ savedAt: '2026-11-24T08:05:09Z', full: true })
+    emit({ requestId: 'req1', done: 1, total: 3, objects: 12 })
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('growing')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('throttled')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('savedAt')
+    expect(service.getSnapshot().indexes.a).not.toHaveProperty('full')
     pendingIndex[0]({ ok: true, value: { status: status(), elapsedMs: 5 } })
     await settle()
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 2, total: 2, objects: 40, status: status() })
@@ -470,19 +547,36 @@ describe('ObjectSearchService', () => {
     expect(calls.index.at(-1)).toEqual({ connectionId: 'bq', requestId: expect.any(String), definitions: true, allProjects: true, maxProjects: 500 })
     pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
     await settle()
-    // SQL Server's nodes re-read nothing (its index has no scoped refresh).
+    // SQL Server's nodes ask a check of their database (or, on the server, of every database), queued behind its running build;
+    // no other SQL Server refresh exists.
     const count = calls.index.length
     service.refreshNode('a', { type: 'object', object: { kind: 'table', database: 'Sales', schema: 'dbo', name: 'Orders' } })
+    expect(calls.index).toHaveLength(count)
     sql({ ok: true, value: { status: status(), elapsedMs: 1 } })
     await settle()
-    expect(calls.index).toHaveLength(count)
-    // A query tab's run whose result names a stale mark re-reads the datasets DDL marked; one naming none (whatever it ran), or a tab
-    // on another server, re-reads nothing.
+    expect(calls.index).toHaveLength(count + 1)
+    expect(calls.index.at(-1)).toEqual({ connectionId: 'a', requestId: expect.any(String), definitions: true, memoryLimitMiB: undefined, stale: true, database: 'Sales' })
+    expect(service.getSnapshot().indexes.a?.checking).toBe(true)
+    pendingIndex.at(-1)!({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    service.refreshNode('a', { type: 'object', object: { kind: 'server' } })
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'a', stale: true, checkAll: true })
+    pendingIndex.at(-1)!({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    expect(service.refreshBigQuery('a', { scope: { project: 'varia-alpha' } })).toBe(false)
+    // A query tab's run whose result names a stale mark checks what DDL marked; one naming none (whatever it ran) checks nothing.
+    const checked = calls.index.length
     vi.mocked(documents.get).mockImplementation(((tabId: string) => ({ id: tabId, connectionId: tabId === 'q1' ? 'bq' : 'a' })) as never)
     events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'CREATE_TABLE' } } as never })
+    expect(calls.index).toHaveLength(checked)
     events.emit({ type: 'query.finished', tabId: 'q2', queryId: 'x', summary: { indexStale: 4 } as never })
-    expect(calls.index).toHaveLength(count)
+    expect(calls.index.at(-1)).toMatchObject({ connectionId: 'a', stale: true })
+    expect(calls.index.at(-1)).not.toHaveProperty('database')
+    pendingIndex.at(-1)!({ ok: true, value: { status: status(), elapsedMs: 1 } })
+    await settle()
+    const count2 = calls.index.length
     events.emit({ type: 'query.finished', tabId: 'q1', queryId: 'x', summary: { job: { project: 'varia-alpha', jobId: 'j', statementType: 'SELECT' }, indexStale: 4 } as never })
+    expect(calls.index).toHaveLength(count2 + 1)
     expect(calls.index.at(-1)).toMatchObject({ connectionId: 'bq', stale: true })
     // Two refreshes asked during a build each run once after it, in order, and the same one twice runs once.
     service.refreshBigQuery('bq', { stale: true })
@@ -651,6 +745,89 @@ describe('ObjectSearchService', () => {
     pendingIndex[2]({ ok: false, error: 'stopped', code: 'CANCELLED' })
     await settle()
     expect(service.getSnapshot().indexes.a).toEqual({ connectionId: 'a', done: 0, total: 0, objects: 40, status: status() })
+  })
+
+  it('does not settle refreshBigQueryScopes waiters when a superseded build request rejects', async () => {
+    const calls = { index: [] as Parameters<VariaApi['explorerIndex']>[0][], cancel: [] as string[][] }
+    const pendingIndex: ((result: ApiResult<ObjectIndexResult>) => void)[] = []
+    const rejectable: ((error: Error) => void)[] = []
+    const bqApi: ObjectSearchOptions['api'] = {
+      explorerIndex: vi.fn(params => {
+        calls.index.push(params)
+        return new Promise<ApiResult<ObjectIndexResult>>((resolve, reject) => {
+          pendingIndex.push(resolve)
+          rejectable.push(reject)
+        })
+      }),
+      explorerSearch: vi.fn(async () => ({ ok: true as const, value: { hits: [], total: 0, partial: false, elapsedMs: 1, index: status({ provider: 'bigquery' }) } })),
+      explorerCancel: vi.fn(async ids => { calls.cancel.push([...ids]); return { ok: true as const, value: { cancelled: ids.length } } }),
+      onExplorerIndexProgress: () => () => {}
+    }
+    const bqConnections = new Connections([bigQueryConnection('bq')])
+    let nextId = 0
+    const search = new ObjectSearchService({
+      api: bqApi,
+      documents: { openCustom: vi.fn(), registerProvider: vi.fn(() => ({ dispose: () => {} })), get: vi.fn(), activate: vi.fn(), getSnapshot: vi.fn() } as unknown as ObjectSearchOptions['documents'],
+      connections: bqConnections,
+      settings: { get: ((key: string) => key === 'objectExplorer.search.indexOnConnect' ? false : key === 'objectExplorer.search.definitions' ? true : undefined) as ObjectSearchOptions['settings']['get'] },
+      events: { subscribe: () => ({ dispose: () => {} }) },
+      newId: () => `bq-req-${++nextId}`
+    })
+    let settled: boolean | undefined
+    const waiter = search.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'sales' }]).then(ok => { settled = ok; return ok })
+    // Supersede the first request with a new build.
+    search.build('bq')
+    expect(search.getSnapshot().indexes.bq?.requestId).toBe('bq-req-2')
+    // Rejecting the superseded req-1 must NOT settle the waiter while req-2 is still active.
+    rejectable[0](new Error('superseded failure'))
+    await settle()
+    expect(settled).toBeUndefined()
+    // Completing the active req-2 settles the waiter with true.
+    pendingIndex.at(-1)!({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    expect(await waiter).toBe(true)
+    search.dispose()
+  })
+
+  it('reads the index status after a stopped first build, so what it read shows as a stopped index with Build index', async () => {
+    const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
+    const { service, api, pendingIndex, connections } = harness()
+    const partial = bq({ indexed: 3, databases: 3, objects: 120, stopped: true })
+    api.explorerIndexStatus = vi.fn(async () => ({ ok: true as const, value: { status: partial, elapsedMs: 0 } }))
+    connections.set([bigQueryConnection('bq')])
+    expect(service.getSnapshot().indexes.bq?.status).toBeUndefined()
+    service.stopBuild('bq')
+    pendingIndex[0]({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    expect(api.explorerIndexStatus).toHaveBeenCalledWith({ connectionId: 'bq' })
+    const entry = service.getSnapshot().indexes.bq!
+    expect(entry).toEqual({ connectionId: 'bq', done: 3, total: 3, objects: 120, status: partial })
+    expect(indexSummary(entry, entry.status)).toBe('Index: 120 objects, 5 definitions in 3 datasets · build stopped')
+    expect(indexIncomplete(entry, entry.status)).toBe(true)
+    expect(unindexedServers(['bq'], service.getSnapshot().indexes)).toEqual(['bq'])
+    expect(indexGap(entry)).toBe('build stopped')
+    // A newer build that started before the status came back keeps its own entry, while it runs and after it finishes.
+    let answer: (value: ApiResult<ObjectIndexResult>) => void = () => {}
+    api.explorerIndexStatus = vi.fn(() => new Promise<ApiResult<ObjectIndexResult>>(resolve => { answer = resolve }))
+    service.build('bq')
+    service.stopBuild('bq')
+    pendingIndex[1]({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    service.build('bq')
+    const late = answer
+    late({ ok: true, value: { status: bq({ state: 'none' }), elapsedMs: 0 } })
+    await settle()
+    expect(service.getSnapshot().indexes.bq).toMatchObject({ requestId: 'req3', status: partial })
+    service.stopBuild('bq')
+    pendingIndex[2]({ ok: false, code: 'CANCELLED', error: 'stopped' })
+    await settle()
+    const stale = answer
+    service.build('bq')
+    const complete = bq({ indexed: 9, databases: 9, objects: 900 })
+    pendingIndex[3]({ ok: true, value: { status: complete, elapsedMs: 1 } })
+    await settle()
+    stale({ ok: true, value: { status: partial, elapsedMs: 0 } })
+    await settle()
+    expect(service.getSnapshot().indexes.bq?.status).toEqual(complete)
   })
 
   it('cancels a disconnected single-target search and typing task, retaining filters and completed hits while rejecting late replies', async () => {
@@ -1095,6 +1272,10 @@ describe('ObjectSearchService', () => {
     expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0, status: status({ skipped: [{ database: '', code: 'CATALOG_ERROR', message: 'm' }, { database: 'Big', code: childrenLeftOut, message: 'm' }] }) }))
       .toBe('server objects skipped, children left out of 1 database')
     expect(indexGap({ connectionId: 'c', done: 0, total: 0, objects: 0 })).toBe('no index yet')
+    // Definitions left out because the indexes' memory ran out are a gap of their own, named per server.
+    const starved = { connectionId: 'd', done: 2, total: 2, objects: 30, status: status({ objects: 30, modules: 0, cut: 1204, leftOut: 1204, leftOutIn: 2 }) }
+    expect(indexGap(starved)).toBe('1,204 definitions left out (not enough index memory)')
+    expect(allIndexesSummary([healthy, starved], label)).toBe('Indexes: 70 objects on 2 servers · srv-d: 1,204 definitions left out (not enough index memory)')
   })
 
   it('reports a failed search and clears results for empty text', async () => {
@@ -1370,19 +1551,101 @@ describe('ObjectSearchService', () => {
     expect(searchHitNames({ kind: 'bqDataset', project: 'varia-alpha', name: 'sales' })).toEqual({ name: 'sales', qualified: '`varia-alpha.sales`' })
   })
 
+  it('says how fresh an index is: checked, checking, may have changed and not verified, in the line, the band and All servers', () => {
+    const now = Date.parse('2026-11-26T10:05:09Z')
+    // Checked: how old the oldest read is (saved: it came from the saved index) and when the unit checked longest ago was checked.
+    const checked = status({ readAt: '2026-11-26T08:05:09Z', saved: true, checkedAt: '2026-11-26T10:05:09Z' })
+    expect(freshnessText(undefined, checked, now)).toBe('saved 2 h ago · checked just now')
+    expect(indexSummary(undefined, checked, now)).toBe('Index: 40 objects, 5 definitions in 2 databases · saved 2 h ago · checked just now')
+    // A healthy index's freshness is a click away in the band (the details popover), not kept in view.
+    expect(indexIncomplete({ connectionId: 'a', done: 2, total: 2, objects: 40, status: checked }, checked)).toBe(false)
+    expect(freshnessText(undefined, status({ readAt: '2026-11-26T10:00:09Z', checkedAt: '2026-11-26T10:03:09Z' }), now)).toBe('read 5 min ago · checked 2 min ago')
+    // Checking: from the status, or from a check this window asked (whose progress keeps what is held in the line).
+    const checking = status({ readAt: '2026-11-26T08:05:09Z', saved: true, checkedAt: '2026-11-26T09:05:09Z', checking: true, stale: 1 })
+    expect(freshnessText(undefined, checking, now)).toBe('saved 2 h ago · checking')
+    const asked = { connectionId: 'a', requestId: 'r', done: 0, total: 1, objects: 40, checking: true as const, status: checked }
+    expect(indexSummary(asked, checked, now)).toBe('Index: 40 objects, 5 definitions in 2 databases · saved 2 h ago · checking')
+    expect(indexIncomplete(asked, checking)).toBe(true)
+    // A check with no index yet is a build: it says so.
+    expect(indexSummary({ ...asked, status: undefined }, undefined, now)).toBe('Indexing 0 of 1 database (40 objects so far)…')
+    // May have changed: DDL marked, or a search found due by age, and no check has read it yet; kept in view in the band.
+    const stale = status({ readAt: '2026-11-26T08:05:09Z', checkedAt: '2026-11-26T09:05:09Z', stale: 2 })
+    expect(freshnessText(undefined, stale, now)).toBe('read 2 h ago · 2 databases may have changed')
+    expect(indexIncomplete({ connectionId: 'a', done: 2, total: 2, objects: 40, status: stale }, stale)).toBe(true)
+    expect(indexGap({ connectionId: 'a', done: 2, total: 2, objects: 40, status: stale }, now)).toBe('2 databases may have changed')
+    // Not verified: reads with no fingerprint to check them by.
+    const unverified = status({ readAt: '2026-11-26T09:05:09Z', checkedAt: '2026-11-26T09:05:09Z', unverified: 1 })
+    expect(freshnessText(undefined, unverified, now)).toBe('read 1 h ago · checked 1 h ago · 1 database not verified')
+    expect(indexGap({ connectionId: 'a', done: 2, total: 2, objects: 40, status: unverified }, now)).toBe('1 database not verified')
+    // BigQuery counts datasets; its loaded and unlisted datasets say "not checked" (savedIndexText) rather than "not verified".
+    const bq = status({ provider: 'bigquery', indexed: 4, readAt: '2026-11-26T08:05:09Z', saved: true, savedAt: '2026-11-26T08:05:09Z', unverified: 4, stale: 1 })
+    expect(bigQueryIndexSummary(undefined, bq, now)).toBe('Index: 40 objects, 5 definitions in 4 datasets · saved 2 h ago, not checked · 1 dataset may have changed')
+    // Nothing to say: no index, or a status with no times; a malformed time says nothing rather than "NaN".
+    expect(freshnessText(undefined, status({ state: 'none' }), now)).toBe('')
+    expect(freshnessText(undefined, status({ readAt: 'soon' }), now)).toBe('')
+    // The tooltip gives the times on the local clock.
+    expect(freshnessTitle(checked)).toBe(`Saved ${new Date('2026-11-26T08:05:09Z').toLocaleString()}\nChecked ${new Date('2026-11-26T10:05:09Z').toLocaleString()}`)
+    expect(freshnessTitle(status())).toBeUndefined()
+  })
+
+  it('takes a check database or checkAll only with stale, never both, and a database name an identifier long', () => {
+    const base = { connectionId: '00000000-0000-4000-8000-000000000001', requestId: '00000000-0000-4000-8000-000000000002' }
+    const parse = (extra: object) => requestSchemas['explorer.index'].safeParse(Object.assign({}, base, extra)).success
+    expect(parse({ stale: true, database: 'Sales' })).toBe(true)
+    expect(parse({ stale: true, checkAll: true })).toBe(true)
+    expect(parse({ database: 'Sales' })).toBe(false)
+    expect(parse({ checkAll: true })).toBe(false)
+    expect(parse({ stale: true, database: 'Sales', checkAll: true })).toBe(false)
+    expect(parse({ stale: true, checkAll: false })).toBe(false)
+    expect(parse({ stale: true, database: 'x'.repeat(129) })).toBe(false)
+    expect(parse({ stale: true, database: 'a\u0000b' })).toBe(false)
+    expect(parse({ stale: true, database: '' })).toBe(false)
+  })
+
   it('says what a BigQuery index holds, in datasets, and which pass its build is in', () => {
     const bq = (overrides: Partial<ObjectIndexStatus> = {}) => status({ provider: 'bigquery', ...overrides })
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
     expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, undefined)).toBe('Discovering accessible BigQuery projects…')
+    // What was loaded from the saved index is searchable while the build checks it: the line says how old it is, and the
+    // band keeps it in view; an index whose build ended without checking it says so.
+    const now = Date.parse('2026-11-26T10:05:09Z')
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects', savedAt: '2026-11-26T08:05:09Z', full: true }, undefined, now))
+      .toBe('Discovering accessible BigQuery projects… Index saved 2 h ago, checking.')
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 3, total: 12, objects: 900, phase: 'names', savedAt: '2026-11-23T10:05:09Z', full: true, throttled: true }, undefined, now))
+      .toBe('Indexing 3 of 12 datasets (900 objects so far)… Index saved 3 d ago, checking. BigQuery is rate limiting the calls, which retry.')
+    const unchecked = status({ provider: 'bigquery', indexed: 4, savedAt: '2026-11-26T10:04:09Z' })
+    expect(bigQueryIndexSummary(undefined, unchecked, now)).toBe('Index: 40 objects, 5 definitions in 4 datasets · saved 1 min ago, not checked')
+    expect(indexIncomplete({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, unchecked)).toBe(true)
+    expect(indexGap({ connectionId: 'b', done: 4, total: 4, objects: 40, status: unchecked }, now)).toBe('saved 1 min ago, not checked')
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4 }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
+    // A refresh's progress carries no age (it checks none of them): the line keeps the last status's "not checked".
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 0, total: 1, objects: 40, phase: 'names' }, unchecked, now))
+      .toBe('Indexing 0 of 1 dataset (40 objects so far)… Index saved 1 min ago, not checked.')
+    // A full build whose progress carries no age has checked everything it loaded: the status's older word does not show.
+    expect(bigQueryIndexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 40, phase: 'names', full: true }, unchecked, now))
+      .toBe('Indexing 1 of 4 datasets (40 objects so far)…')
+    // A malformed age (never sent: main's schema refuses it) says nothing rather than "NaN".
+    expect(bigQueryIndexSummary(undefined, status({ provider: 'bigquery', indexed: 4, savedAt: 'soon' }), now)).toBe('Index: 40 objects, 5 definitions in 4 datasets')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Discovering BigQuery projects…')
     expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' }, { connectionId: 'a', requestId: 'r2', done: 0, total: 0, objects: 0 }])).toBe('Discovering BigQuery projects on 2 servers…')
-    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }])).toBe('Indexing objects 2 / 5')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }])).toBe('Listing BigQuery datasets 2 / 5')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 480, objects: 30, phase: 'names', growing: true }])).toBe('Listing BigQuery datasets 2 / ~480')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 5300, total: 6624, objects: 30, phase: 'details', throttled: true }])).toBe('Reading BigQuery object details 5,300 / 6,624 (rate limited)')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects', throttled: true }])).toBe('Discovering BigQuery projects… (rate limited)')
+    // SQL Server's label is unchanged, alone or across servers; builds counting different things are not summed.
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }])).toBe('Indexing objects 3 / 12')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'c', requestId: 'r2', done: 1, total: 4, objects: 3 }])).toBe('Indexing objects 4 / 16 on 2 servers')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'b', requestId: 'r2', done: 7, total: 30, objects: 3, phase: 'details', throttled: true }])).toBe('Indexing objects on 2 servers… (rate limited)')
+    expect(indexStatusText([{ connectionId: 'a', requestId: 'r', done: 3, total: 12, objects: 30 }, { connectionId: 'b', requestId: 'r2', done: 0, total: 0, objects: 0, phase: 'projects' }])).toBe('Indexing objects on 2 servers…')
+    expect(indexStatusText([{ connectionId: 'b', requestId: 'r', done: 2, total: 5, objects: 30, phase: 'names' }, { connectionId: 'c', requestId: 'r2', done: 1, total: 4, objects: 3, phase: 'names' }])).toBe('Listing BigQuery datasets 3 / 9 on 2 servers')
+    expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 40, objects: 120, phase: 'names', growing: true, throttled: true }, undefined)).toBe('Indexing 1 of about 40 datasets (120 objects so far)… BigQuery is rate limiting the calls, which retry.')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 1, total: 4, objects: 120, phase: 'names' }, undefined)).toBe('Indexing 1 of 4 datasets (120 objects so far)…')
     expect(indexSummary({ connectionId: 'b', requestId: 'r', done: 7, total: 30, objects: 120, phase: 'details' }, undefined)).toBe('Reading details of 7 of 30 objects…')
     expect(indexSummary(undefined, bq())).toBe('Index: 40 objects, 5 definitions in 2 datasets')
     expect(indexSummary(undefined, bq({ projects: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets')
     expect(indexSummary(undefined, bq({ objects: 4210, modules: 180, indexed: 62, projects: 14 }))).toBe('Index: 4,210 objects, 180 definitions in 62 datasets across 14 projects')
     expect(indexSummary(undefined, bq({ state: 'none' }))).toBe('This connection has no index yet.')
+    expect(indexSummary(undefined, status({ indexed: 2, stopped: true }))).toMatch(/ in 2 databases · build stopped$/)
     expect(indexSummary(undefined, bq({ namesOnly: ['varia-beta'], skipped: [
       { database: 'census', project: 'varia-beta', code: 'PERMISSION_DENIED', message: 'm' }, { database: '', project: 'varia-gamma', code: 'API_DISABLED', message: 'm' },
       { database: 'sales', project: 'varia-alpha', code: 'CATALOG_ERROR', message: 'm', details: true }, { database: 'big', project: 'varia-alpha', code: childrenLeftOut, message: 'm' }
@@ -1391,7 +1654,7 @@ describe('ObjectSearchService', () => {
     expect(indexedCount(status({ indexed: 1 }))).toBe('1 database')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: 'census', project: 'varia-beta', code: 'NOT_FOUND', message: 'm' }, { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', message: 'm', details: true }] }) }))
       .toBe('1 dataset skipped, details missing')
-    expect(indexSummary(undefined, bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects because the index reached its 512 MiB memory limit.' }] })))
+    expect(indexSummary(undefined, bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })))
       .toContain('index memory limit reached')
     expect(indexGap({ connectionId: 'b', done: 0, total: 0, objects: 0, status: bq({ skipped: [{ database: '', project: '', code: 'TOO_LARGE', message: 'You have access to more than 500 projects; the index keeps the first 500.' }, { database: '', project: '', code: 'TOO_LARGE', message: 'Indexing stopped early for auto-discovered projects because the index reached its 512 MiB memory limit.' }] }) }))
       .toBe('project list truncated, index memory limit reached')
@@ -1659,6 +1922,48 @@ describe('Search Objects\' summary', () => {
       { bq: { connectionId: 'bq', requestId: 'r', done: 0, total: 0, objects: 0, phase: 'projects' } })).toContain('varia-alpha still discovering projects')
     expect(indexSummary(undefined, status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] }))).toBe('Index: 40 objects, 5 definitions in 2 databases · columns and other children left out of 1 large database')
     expect(indexSummary(undefined, undefined)).toBe('This server has no index yet.')
+    // Memory ran out: the line says how many definitions were left out, apart from the user's own names-only option
+    // and from definitions only cut at their length (`cut` alone), and keeps the line in Object Explorer's band.
+    const starved = status({ modules: 12, cut: 1206, leftOut: 1204, leftOutIn: 2 })
+    expect(indexSummary(undefined, starved)).toBe('Index: 40 objects, 12 definitions in 2 databases · 1,204 definitions left out (not enough index memory)')
+    expect(indexSummary(undefined, status({ cut: 1, leftOut: 1, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 1 definition left out (not enough index memory)')
+    expect(indexSummary(undefined, status({ provider: 'bigquery', cut: 3, leftOut: 3, leftOutIn: 1 }))).toBe('Index: 40 objects, 5 definitions in 2 datasets · 3 definitions left out (not enough index memory)')
+    // The count is the index's: some may be the server's own or the system objects', which are in no database.
+    expect(indexSummary(undefined, status({ cut: 12, leftOut: 12 }))).toBe('Index: 40 objects, 5 definitions in 2 databases · 12 definitions left out (not enough index memory)')
+    expect(indexIncomplete(undefined, starved)).toBe(true)
+    expect(indexSummary(undefined, status({ cut: 2 }))).toBe('Index: 40 objects, 5 definitions in 2 databases')
+    expect(indexIncomplete(undefined, status({ cut: 2 }))).toBe(false)
+    expect(indexSummary(undefined, status({ definitions: false }))).not.toContain('memory')
+    // What to do about it names the option by its label, and only an index short of memory gets the note: left-out
+    // definitions, children left out, a database or dataset that did not fit, or BigQuery projects read by name only.
+    const limit = settingDef('objectExplorer.search.memoryLimitMiB').label
+    expect(indexMemoryNote([status(), starved])).toBe(`The index does not have enough memory, so a search inside definitions misses the ones left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`)
+    const partly = `The index does not have enough memory, so part of what could be indexed was left out. Raise ${limit} in Tools › Options › SQL Server Object Explorer › Commands, then rebuild the index.`
+    expect(indexMemoryNote([status({ skipped: [{ database: 'Big', code: childrenLeftOut, message: 'm' }] })])).toBe(partly)
+    expect(indexMemoryNote([status({ skipped: [{ database: 'Huge', code: 'TOO_LARGE', message: 'The database does not fit in the index\'s memory (512 MiB across every connection).' }] })])).toBe(partly)
+    expect(indexMemoryNote([status({ provider: 'bigquery', namesOnly: ['disc-a'] })])).toBe(partly)
+    // A BigQuery dataset that kept what it held while new objects' details did not fit: details missing, and the note.
+    const partial = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE', details: true,
+      message: 'The details of 3 objects were left out: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest does not hold them.' }] })
+    expect(indexSummary(undefined, partial)).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
+    expect(indexGap({ connectionId: 'bq', done: 0, total: 0, objects: 0, status: partial })).toBe('details missing')
+    // The same dataset with a failed read as well still counts once; another dataset counts too.
+    const failedToo = { database: 'sales', project: 'varia-alpha', code: 'TIMEOUT', details: true, message: 'The details of 1 object could not be read: timed out.' } as const
+    expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, failedToo] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 1 dataset')
+    expect(indexSummary(undefined, { ...partial, skipped: [...partial.skipped, { ...failedToo, project: 'varia-beta' }] })).toBe('Index: 40 objects, 5 definitions in 2 datasets · details missing in 2 datasets')
+    // A dataset whose new names did not fit is left as it was read before: listed as skipped, with the note.
+    const keptAsWas = status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'varia-alpha', code: 'TOO_LARGE',
+      message: 'The dataset\'s changes did not fit, so it was kept as it was read before: BigQuery leaves part of the index\'s 512 MiB memory limit to SQL Server, and the rest is in use.' }] })
+    expect(indexSummary(undefined, keptAsWas)).toBe('Index: 40 objects, 5 definitions in 2 datasets · 1 dataset skipped')
+    expect(indexMemoryNote([keptAsWas])).toBe(partly)
+    expect(indexMemoryNote([partial])).toBe(partly)
+    expect(indexMemoryShort(starved)).toBe(true)
+    for (const fine of [status(), status({ cut: 2 }), status({ definitions: false }), status({ skipped: [{ database: 'x', code: 'NO_DB_ACCESS', message: 'm' }] }),
+      status({ provider: 'bigquery', skipped: [{ database: 'sales', project: 'p', code: 'TOO_LARGE', message: 'The dataset has more objects than the index lists; it keeps the first ones.' }] }),
+      status({ state: 'none', leftOut: 1 }), undefined]) {
+      expect(indexMemoryShort(fine), JSON.stringify(fine)).toBe(false)
+      expect(indexMemoryNote([fine])).toBeUndefined()
+    }
     // Build index is offered for the servers with no index and none building.
     const building = { connectionId: 'b', requestId: 'r', done: 0, total: 0, objects: 0 }, built = { connectionId: 'c', done: 1, total: 1, objects: 3, status: status() }
     expect(unindexedServers(['a', 'b', 'c', 'd'], { b: building, c: built, d: { connectionId: 'd', done: 0, total: 0, objects: 0, error: 'failed' } })).toEqual(['a', 'd'])
@@ -1740,5 +2045,103 @@ describe('the search pickers in a popout', () => {
       expect(source, file).toMatch(/ownerDocument/)
       expect(source, file).toMatch(/observeResize\(/)
     }
+  })
+})
+
+describe('refreshBigQueryScopes', () => {
+  it('resolves false when an earlier queued scope fails even if a subsequent scope succeeds', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    const batch = service.refreshBigQueryScopes('bq', [
+      { project: 'varia-alpha', dataset: 'ds1' },
+      { project: 'varia-alpha', dataset: 'ds2' }
+    ])
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds1' } })
+
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds2' } })
+
+    // A second caller joining after ds1 already failed still resolves true if remaining scopes succeed.
+    const laterCaller = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    pendingIndex[3]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+
+    expect(await batch).toBe(false)
+    expect(await laterCaller).toBe(true)
+    service.dispose()
+  })
+
+  it('isolates overlapping concurrent scope batches by requested scopes while reflecting shared scope failures', async () => {
+    const { service, calls, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    // Overlapping unrelated batches: Caller B starts [ds3] BEFORE ds1 settles.
+    const callerA = service.refreshBigQueryScopes('bq', [
+      { project: 'varia-alpha', dataset: 'ds1' },
+      { project: 'varia-alpha', dataset: 'ds2' }
+    ])
+    const callerB = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    expect(calls.index).toHaveLength(2)
+    expect(calls.index[1]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds1' } })
+
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(3)
+    expect(calls.index[2]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds2' } })
+    pendingIndex[2]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+    expect(calls.index).toHaveLength(4)
+    expect(calls.index[3]).toMatchObject({ scope: { project: 'varia-alpha', dataset: 'ds3' } })
+    pendingIndex[3]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+
+    expect(await callerA).toBe(false)
+    expect(await callerB).toBe(true)
+
+    // Overlapping shared scope: [ds1] + [ds1] while ds1 is in flight and fails -> both resolve false.
+    const sharedA = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    const sharedB = service.refreshBigQueryScopes('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    expect(calls.index).toHaveLength(5)
+    pendingIndex[4]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+    await settle()
+    expect(calls.index).toHaveLength(6)
+    pendingIndex[5]({ ok: false, code: 'TIMEOUT', error: 'ds1 failed' })
+
+    expect(await sharedA).toBe(false)
+    expect(await sharedB).toBe(false)
+    service.dispose()
+  })
+
+  it('distinguishes backend errors from deliberate cancellations in refreshBigQueryScopesOutcome', async () => {
+    const { service, pendingIndex, connections } = harness({ indexOnConnect: false })
+    connections.set([bigQueryConnection('bq')])
+    service.build('bq')
+    pendingIndex[0]({ ok: true, value: { status: status({ provider: 'bigquery' }), elapsedMs: 1 } })
+    await settle()
+
+    const failed = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds1' }])
+    pendingIndex[1]({ ok: false, code: 'TIMEOUT', error: 'Dataset refresh timed out.' })
+    expect(await failed).toEqual({ ok: false, error: 'Dataset refresh timed out.' })
+
+    const stopped = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds2' }])
+    service.stopBuild('bq')
+    pendingIndex[2]({ ok: false, code: 'CANCELLED', error: 'Cancelled.' })
+    expect(await stopped).toEqual({ ok: false, cancelled: true })
+
+    const disconnected = service.refreshBigQueryScopesOutcome('bq', [{ project: 'varia-alpha', dataset: 'ds3' }])
+    connections.set([])
+    expect(await disconnected).toEqual({ ok: false, cancelled: true })
+    service.dispose()
   })
 })

@@ -34,9 +34,12 @@ internal sealed class BigQueryTail(string jobId, string? location, bool cancelle
 }
 
 /// <summary>A script statement's job, as jobs.list's full projection reports it. TargetProject and TargetDataset: where its DDL
-/// acted (statistics' ddlTargetTable, Routine or Dataset), for the Search Objects index's stale marks.</summary>
+/// acted (statistics' ddlTargetTable, Routine or Dataset), for the Search Objects index's stale marks. ScriptStartLine,
+/// ScriptStartColumn, ScriptFrameCount, InProcedure and ScriptEvaluationKind come from statistics.scriptStatistics (the
+/// frame's SQL text is never read or kept) for binding #Name result markers.</summary>
 internal sealed record BigQueryChild(string Id, string? Location, long Created, bool Done, string? StatementType, ErrorProto? Error, long? DmlAffected, string? Ddl,
-    string? TargetProject = null, string? TargetDataset = null);
+    string? TargetProject = null, string? TargetDataset = null, int? ScriptStartLine = null, int? ScriptStartColumn = null, int ScriptFrameCount = 0, bool InProcedure = false,
+    string? ScriptEvaluationKind = null);
 
 /// <summary>
 /// A query tab's BigQuery session (docs/bigquery.md, Sessions), keyed by Varia's tab id. BigQuery's own session id never
@@ -251,10 +254,35 @@ internal sealed partial class BigQueryService
         var failure = done ? BigQueryJobHistory.Member(status, "errorResult") ?? BigQueryJobHistory.Member(item, "errorResult") : null;
         // Callers read only whether a child failed; its reason and message are kept short.
         var error = failure is { } e ? new ErrorProto { Reason = Bounded(BigQueryJobHistory.Text(e, "reason"), 64), Message = BigQueryJobHistory.Clip(BigQueryJobHistory.Text(e, "message"), 1024) } : null;
+        // statistics.scriptStatistics.stackFrames: 1-based line and column in the submitted script, frame depth and whether
+        // the frame is inside a procedure; the frame's SQL text is never decoded.
+        var script = BigQueryJobHistory.Member(statistics, "scriptStatistics");
+        var evaluationKind = Bounded(BigQueryJobHistory.Text(script, "evaluationKind"), 32);
+        int? scriptStartLine = null;
+        int? scriptStartColumn = null;
+        var scriptFrameCount = 0;
+        var inProcedure = false;
+        if (script is { } s && s.TryGetProperty("stackFrames", out var frames) && frames.ValueKind == JsonValueKind.Array)
+        {
+            scriptFrameCount = frames.GetArrayLength();
+            if (scriptFrameCount == 1 && frames[0].ValueKind == JsonValueKind.Object)
+            {
+                var frame = frames[0];
+                if (BigQueryJobHistory.Number(frame, "startLine") is >= 1 and <= int.MaxValue and var startLine) scriptStartLine = (int)startLine;
+                if (BigQueryJobHistory.Number(frame, "startColumn") is >= 1 and <= int.MaxValue and var startColumn) scriptStartColumn = (int)startColumn;
+                inProcedure = BigQueryJobHistory.Text(frame, "procedureId") is { Length: > 0 };
+            }
+            else if (scriptFrameCount > 1)
+            {
+                for (var i = 0; i < scriptFrameCount; i++)
+                    if (frames[i].ValueKind == JsonValueKind.Object && BigQueryJobHistory.Text(frames[i], "procedureId") is { Length: > 0 }) { inProcedure = true; break; }
+            }
+        }
         return new(id, Bounded(BigQueryJobHistory.Text(reference, "location"), BigQueryLimits.Location), BigQueryJobHistory.Number(statistics, "creationTime") ?? 0, done,
             StatementOf(new JobStatistics { Query = new JobStatistics2 { StatementType = BigQueryJobHistory.Text(query, "statementType") } }), error,
             BigQueryJobHistory.Number(query, "numDmlAffectedRows"), Bounded(BigQueryJobHistory.Text(query, "ddlOperationPerformed"), 64),
-            Bounded(BigQueryJobHistory.Text(target, "projectId"), 128), Bounded(BigQueryJobHistory.Text(target, "datasetId"), 1024));
+            Bounded(BigQueryJobHistory.Text(target, "projectId"), 128), Bounded(BigQueryJobHistory.Text(target, "datasetId"), 1024),
+            scriptStartLine, scriptStartColumn, scriptFrameCount, inProcedure, evaluationKind);
 
         static string? Bounded(string? name, int max) => name is { Length: > 0 } && name.Length <= max ? name : null;
     }

@@ -3,8 +3,8 @@ import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { expandExplorerPath, explorerRow } from './fixtures/explorer-tree.mjs'
 import {
-  backendReady, connectDialogWindow, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, menubar, movePane, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
-  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, submitConnect, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
+  backendReady, connectDialogWindow, dialogClosed, dialogWindow, documentTabSlots, editorText as editorTextOf, memoryIndicator, memorySaved, menubar, movePane, quickInput, optionsControls, optionsDescription, optionsForm, optionsHeading, optionsNotes, optionsSection, pane, dockPopoutBack, popoutTabs, queryServer, resultGrid,
+  shortcutsInspector, shortcutsRow, shortcutsSearch, shortcutsSheet, shortcutsTable, submitConnect, toasts, toolbarButton, warningBanner as warningBannerOf, expectEditorShown, pressToClose, clickToClose
 } from './fixtures/ui.mjs'
 import { resizeContent } from './fixtures/window-resize.mjs'
 import { parseCalls } from './fixtures/call-log.mjs'
@@ -23,9 +23,9 @@ const watchdog = setTimeout(() => { console.error('Options suite exceeded its ti
 
 const settingsFile = () => join(profile, 'settings.json')
 const stored = () => readFile(settingsFile(), 'utf8').then(JSON.parse, () => null)
-async function launch(fresh = false) {
+async function launch(fresh = false, extra = {}) {
   if (fresh || !profile) profile = await mkdtemp(resolve('artifacts', 'options-profile-'))
-  const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control }
+  const env = { ...process.env, VARIA_SMOKE_TEST: '1', VARIA_TEST_USER_DATA: profile, VARIA_TEST_BACKEND: 'workbench', VARIA_TEST_NODE: process.execPath, VARIA_TEST_BACKEND_DIR: control, ...extra }
   delete env.ELECTRON_RUN_AS_NODE
   // Playwright adds --no-sandbox on Linux unless chromiumSandbox is set; only root (cloud sessions) needs it.
   application = await electron.launch({ args: ['.'], env, chromiumSandbox: process.getuid?.() !== 0 })
@@ -454,22 +454,29 @@ try {
   await options.keyboard.press('Home')
   await expect(splitter).toHaveAttribute('aria-valuenow', '224')
   const outlineSwitch = optionsSection(dialog(), 'Execution plan').getByRole('switch', { name: 'Show outline', exact: true })
+  // Modified counts only edits not saved yet: none on opening, the edit until Apply saves it.
+  const modifiedPill = dialog().getByRole('button', { name: /^Modified \(/ })
+  await expect(modifiedPill).toHaveText('Modified (0)')
   await outlineSwitch.uncheck()
   await expect(dialog()).toContainText('1 setting pending')
+  await expect(modifiedPill).toHaveText('Modified (1)')
+  await modifiedPill.click()
+  await expect(heading()).toHaveText('Modified Settings')
+  await expect(dialog().getByRole('switch', { name: 'Show outline', exact: true })).toBeVisible()
   const applyButton = dialog().getByRole('button', { name: 'Apply', exact: true })
   await expect(applyButton).toBeEnabled()
   await applyButton.click()
   await expect(dialog()).toBeVisible()
   await expect(applyButton).toBeDisabled()
   await expect(dialog()).toContainText('Changes applied')
-  await dialog().getByRole('button', { name: /^Modified \(/ }).click()
-  await expect(heading()).toHaveText('Modified Settings')
-  await dialog().getByRole('button', { name: 'Reset Show outline', exact: true }).click()
+  await expect(modifiedPill).toHaveText('Modified (0)')
+  await expect(dialog()).toContainText('No unsaved changes.')
+  await modifiedPill.click()
+  await showPage('Query Results', 'SQL Server', 'Results to Grid')
+  await optionsSection(dialog(), 'Execution plan').getByRole('button', { name: 'Reset Show outline', exact: true }).click()
   await expect(applyButton).toBeEnabled()
   await applyButton.click()
   await expect(applyButton).toBeDisabled()
-  await dialog().getByRole('button', { name: /^Modified \(/ }).click()
-  await showPage('Query Results', 'SQL Server', 'Results to Grid')
   // A text field in the dialog window has its menu, by mouse and by Shift+F10; Escape closes the menu, not the dialog.
   const fieldMenu = options.getByRole('menu', { name: 'Text field', exact: true })
   await search().click({ button: 'right' })
@@ -660,7 +667,10 @@ try {
   profile = await mkdtemp(resolve('artifacts', 'options-legacy-'))
   const legacy = JSON.stringify({ version: 1, options: { scriptUseDatabase: false } })
   await writeFile(join(profile, 'scripting-options.json'), legacy)
-  await launch()
+  // The call log is the suite's: only this launch's requests count in step 8, which this launch also serves (a system with
+  // no key store, which changes nothing here).
+  const configuredBefore = (await calls('explorer.indexStore.configure')).length, clearedBefore = (await calls('explorer.indexStore.clear')).length
+  await launch(false, { VARIA_TEST_SAFE_STORAGE: 'none' })
   await openOptions()
   await node('SQL Server Object Explorer').click()
   await node('Scripting').click()
@@ -670,6 +680,63 @@ try {
   expect(await stored()).toEqual({ version: 1, values: { 'objectExplorer.scripting.scriptUseDatabase': false } })
   expect(await readFile(join(profile, 'scripting-options.json'), 'utf8')).toBe(legacy)
   console.log('Options checks: scripting-options.json is imported into settings.json once and left as it was.')
+
+  // 8. The saved Search Objects index on a system with no key store (docs/object-search.md, Saved index): Options says
+  // beside its three settings that nothing is saved, the opt-in changes what it says, each setting reaches the backend
+  // at once, and the Memory panel's Saved on disk line follows. Then Clear Saved Search Indexes, from the palette.
+  const configured = async () => (await calls('explorer.indexStore.configure')).slice(configuredBefore).map(call => call.mode)
+  const savedLine = async text => {
+    await memoryIndicator(page).click()
+    await expect(memorySaved(page)).toHaveText(text)
+    await page.keyboard.press('Escape')
+  }
+  await expect.poll(configured).toEqual(['noKeyStore'])
+  await savedLine('Saved on diskOff: this system has no key store')
+  await openOptions()
+  await showPage('SQL Server Object Explorer', 'Commands')
+  // Each opening of Options is a window of its own: the controls are found in the one that is open.
+  const note = () => dialog().getByRole('note')
+  const save = () => dialog().getByRole('switch', { name: 'Save index between sessions', exact: true })
+  const limit = () => dialog().getByRole('spinbutton', { name: 'Saved index disk limit', exact: true })
+  const unencrypted = () => dialog().getByRole('switch', { name: 'Save index unencrypted when there is no key store', exact: true })
+  await expect(note()).toHaveText('Search Objects indexes are not being saved on this system: it needs a system keyring (GNOME Keyring or KWallet) to hold the index’s key, and none was found. To save them without encryption, turn on “Save index unencrypted when there is no key store” below.')
+  await expect(save()).toBeChecked()
+  await expect(limit()).toHaveValue('2048')
+  await expect(unencrypted()).not.toBeChecked()
+  // The setting's own description names the risk.
+  await unencrypted().focus()
+  await expect(optionsDescription(dialog())).toContainText('readable by any program or person that can read your files')
+  await unencrypted().check()
+  await expect(note()).toHaveText(/^Search Objects indexes are saved unencrypted on this system, as chosen below: .* Any program or person that can read your files can read the saved object names and definitions\.$/)
+  await limit().fill('512')
+  await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
+  await closed()
+  await expect.poll(configured).toEqual(['noKeyStore', 'clearText'])
+  // A names value, never a key the files are encrypted under, and the folder is the profile's own.
+  const sent = (await calls('explorer.indexStore.configure')).at(-1)
+  expect(sent).toMatchObject({ mode: 'clearText', limitMiB: 512, folder: join(profile, 'SearchIndex') })
+  expect(JSON.parse(await readFile(join(profile, 'search-index-key.json'), 'utf8'))).toEqual({ version: 1, names: sent.key })
+  await savedLine('Saved on disk0 files · 0 MB / 512 MBNot encrypted (your choice in Options)')
+  // Saving off: the note goes, the two settings under it are greyed, and the backend is told to stop and delete.
+  await openOptions()
+  await showPage('SQL Server Object Explorer', 'Commands')
+  await save().uncheck()
+  await expect(note()).toHaveCount(0)
+  await expect(limit()).toBeDisabled()
+  await expect(unencrypted()).toBeDisabled()
+  await clickToClose(dialog().getByRole('button', { name: 'OK', exact: true }))
+  await closed()
+  await expect.poll(configured).toEqual(['noKeyStore', 'clearText', 'disabled'])
+  expect((await calls('explorer.indexStore.configure')).at(-1)).not.toHaveProperty('key')
+  await savedLine('Saved on diskOff in Options')
+  await textbox().focus()
+  await page.keyboard.press('F1')
+  await page.keyboard.type('Clear Saved Search Indexes')
+  await quickInput(page).getByRole('option', { name: /^Object Explorer: Clear Saved Search Indexes/ }).click()
+  // An info toast, which the polite live region also reads out: the toast itself is the one to find.
+  await expect(toasts(page).filter({ hasText: 'There were no saved search indexes to clear.' })).toBeVisible()
+  expect((await calls('explorer.indexStore.clear')).slice(clearedBefore)).toEqual([{}])
+  console.log('Options checks: with no key store Options says the index is not saved and how to opt in, the three saving settings reach the backend at once, the Memory panel follows, and Clear Saved Search Indexes runs from the palette.')
 
   expect(failures).toEqual([])
   await close()

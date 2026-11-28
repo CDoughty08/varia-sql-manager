@@ -2,8 +2,8 @@
 // rx-step-delete): the steps list (drag to reorder, ✓ and ✗ targets, the Start step) beside the selected step's editor, edited in place.
 // T-SQL commands are edited in the query editor with the step's database (completion, Parse, Open in query window); an SSIS step is one
 // scroll with an inline SSISDB picker; SSMS's Advanced page is the More options fold. JobDocumentService keeps every state.
-import { useEffect, useRef, useState, type DragEvent, type RefObject } from 'react'
-import type { editor } from 'monaco-editor'
+import { useEffect, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react'
+import { pruneStepModels, stepModels } from './step-models'
 import { agentLimits, stepActions } from '../../../shared/agent/catalog.ts'
 import {
   serverSubsystems, stepFlagChoices, stepOutputSubsystems, stepFlagsWith, stepOptionsSummary, stepTargetShort, stepText, stepTypeLabel, stepTypeShort, type AgentStepDraft, type AgentStepField,
@@ -21,7 +21,29 @@ import { withKey } from '../query-context'
 import { createQueryEditor, type QueryEditorInstance } from '../editor/create-editor'
 import { registerSqlModel } from '../explorer/peek-editor'
 import Icon from '../Icon'
+import ResizableSplit from '../kit/ResizableSplit'
+import { segmentKey } from '../kit/Segmented'
 import type { JobDocumentService, JobDocumentState } from './JobDocumentService'
+import JobStepsFlow, { useForcedColors } from './JobStepsFlow'
+
+/** Fixed-width badge text for balanced 3-column step cards; full type stays in `title` and `stepTypeShort` stays untouched for Flow/menus. */
+export function stepTypeBadge(subsystem: string): string {
+  const normalized = subsystem.trim()
+  switch (normalized.toLowerCase()) {
+    case 'tsql': return 'TSQL'
+    case 'ssis': return 'SSIS'
+    case 'powershell': return 'PS'
+    case 'cmdexec': return 'Cmd'
+    case 'analysiscommand':
+    case 'analysisquery': return 'SSAS'
+    case 'distribution':
+    case 'merge':
+    case 'queuereader':
+    case 'snapshot':
+    case 'logreader': return 'Repl'
+    default: return stepTypeShort(normalized)
+  }
+}
 
 /** The step types the Type switch shows first, as SSMS users reach for them; the rest are under More. */
 const mainTypes = ['TSQL', 'PowerShell', 'CmdExec', 'SSIS'] as const
@@ -56,32 +78,33 @@ interface StepCommandHandle { replace(key: string, text: string): boolean }
 /** The command's editor: the query editor (Tools › Options, Find) on a model per step, served by the language service with the step's
  *  connection and database when it is T-SQL. */
 /** `epoch` changes each time the job is read: a save renumbers steps, so `s1` may then be another step, and a model (with its undo stack)
- *  is never carried from one read to the next. */
-function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
-  readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
+ *  is never carried from one read to the next. The models belong to the document (`step-models.ts`), so switching List and Flow or closing
+ *  Flow's docked editor keeps each step's undo. */
+function StepCommandEditor({ owner, epoch, stepKey: key, value, subsystem, connectionId, database, readOnly, label, onChange, handle }: {
+  readonly owner: string; readonly epoch: string; readonly stepKey: string; readonly value: string; readonly subsystem: string; readonly connectionId?: string; readonly database?: string; readonly readOnly: boolean
   readonly label: string; readonly onChange: (value: string) => void; readonly handle?: RefObject<StepCommandHandle | null>
 }) {
   const workbench = useWorkbench()
   const stepKey = `${epoch}|${key}`
   const host = useRef<HTMLDivElement>(null)
   const instance = useRef<QueryEditorInstance | undefined>(undefined)
-  const models = useRef(new Map<string, { model: editor.ITextModel; documentId: string }>())
+  const models = useRef(stepModels(owner))
+  models.current = stepModels(owner)
   const changed = useRef(onChange)
   changed.current = onChange
   useEffect(() => {
     const element = host.current
     if (!element) return
     instance.current = createQueryEditor(workbench, element, { compact: true, ariaLabel: label, contextKey: stepEditorContextKey, inEditorPane: false })
-    const owned = models.current
-    return () => { instance.current?.dispose(); instance.current = undefined; for (const entry of owned.values()) entry.model.dispose(); owned.clear() }
-  // The editor lives as long as the section; each step gets its own model below.
+    return () => { instance.current?.dispose(); instance.current = undefined }
+  // The editor lives as long as the section; each step gets its own model below, which outlives it.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => {
     const view = instance.current
     if (!view) return
     let entry = models.current.get(stepKey)
-    for (const [cached, stale] of models.current) if (!cached.startsWith(`${epoch}|`)) { stale.model.dispose(); models.current.delete(cached) }
+    pruneStepModels(owner, epoch)
     if (!entry || entry.model.isDisposed()) {
       const documentId = crypto.randomUUID()
       const model = workbench.monaco.editor.createModel(value, stepLanguage(subsystem), workbench.monaco.Uri.parse(`varia-sql://step/${documentId}`))
@@ -96,7 +119,7 @@ function StepCommandEditor({ epoch, stepKey: key, value, subsystem, connectionId
     return () => listener.dispose()
   // `value` is applied by the effect below, so typing does not reset the model.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stepKey, subsystem, connectionId, database, workbench])
+  }, [owner, stepKey, subsystem, connectionId, database, workbench])
   useEffect(() => {
     const model = models.current.get(stepKey)?.model
     if (model && !model.isDisposed() && model.getValue() !== value) model.setValue(value)
@@ -159,7 +182,10 @@ function Target({ state, step, which, editable, problems, update, id }: { readon
   const text = problemText(problems, step.key, which)
   const missing = step[which] === 4 && (!target || !steps.some(item => item.key === target))
   return <div className="agent-step-row">
-    <label htmlFor={id}>{which === 'onSuccess' ? 'On success' : 'On failure'}</label>
+    <label htmlFor={id} className={which === 'onSuccess' ? 'agent-step-foot-ok' : 'agent-step-foot-bad'}>
+      <Icon name={which === 'onSuccess' ? 'check' : 'close'} />
+      <span>{which === 'onSuccess' ? 'On success' : 'On failure'}</span>
+    </label>
     <div>
       <select id={id} className="property-input" value={value} disabled={!editable} aria-invalid={text.error ? true : undefined}
         onChange={event => {
@@ -300,7 +326,7 @@ function SsisSection({ state, step, editable, update, service, id }: { readonly 
       <h4 id={`${id}-params-h`}>Parameters</h4>
       {!rows ? <p className="field-note"><Icon name="loading" spin />Reading the package's parameters…</p>
         : rows.length === 0 ? <p className="field-note">The package and its project have no parameters.</p>
-          : <table className="properties-table" aria-label="Parameters">
+          : <table className="agent-table" aria-label="Parameters">
             <thead><tr><th scope="col">Parameter</th><th scope="col">Value</th><th scope="col">Comes from</th></tr></thead>
             <tbody>{rows.map(row => {
               const missing = row.required && row.source === 'none'
@@ -345,6 +371,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
   if (decided !== `${step.key} ${step.subsystem}`) { setDecided(`${step.key} ${step.subsystem}`); setSsisText(ssisAsText()) }
   const types = model.subsystems?.length ? model.subsystems : [...mainTypes]
   const more = types.filter(type => !(mainTypes as readonly string[]).includes(type))
+  const flowNote = problemText(problems, step.key, 'flow')
   const name = problemText(problems, step.key, 'name'), command = problemText(problems, step.key, 'command'), server = problemText(problems, step.key, 'server')
   const proxy = step.proxyId ? model.proxies?.find(item => item.id === step.proxyId) : undefined
   const account = proxy ? proxy.identity ?? proxy.name : 'the SQL Server Agent service account'
@@ -368,6 +395,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
       <button type="button" disabled={!editable || state.draft!.steps.startKey === step.key} onClick={() => service.setStartStep(state.id, step.key)}><Icon name="pin" />Make Start step</button>
       <button type="button" className="danger" disabled={!editable} onClick={() => service.deleteStepOf(state.id, step.key)}><Icon name="trash" />Delete</button>
     </div>
+    <FieldMessages text={flowNote} id={`${id}-flow`} />
     <div className="agent-step-grid">
       <div className="agent-step-row">
         <label htmlFor={`${id}-name`}>Step name</label>
@@ -398,6 +426,22 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
         </select> : <input id={`${id}-database`} className="property-input" type="text" maxLength={128} spellCheck={false} value={step.databaseName} disabled={!editable} onChange={event => update({ databaseName: event.target.value })} />}
       </div>}
       <RunAs step={step} model={model} editable={editable} problems={problems} update={update} id={`${id}-runas`} />
+      {serverSubsystems.has(step.subsystem) && <div className="agent-step-row">
+        <label htmlFor={`${id}-olap-server`}>Server</label>
+        <div>
+          <input id={`${id}-olap-server`} className="property-input" type="text" maxLength={128} spellCheck={false} value={step.server} disabled={!editable}
+            aria-invalid={server.error ? true : undefined} onChange={event => update({ server: event.target.value })} />
+          <FieldMessages text={server} id={`${id}-olap-server`} />
+        </div>
+      </div>}
+      {step.subsystem === 'CmdExec' && <div className="agent-step-row">
+        <label htmlFor={`${id}-exit`}>Success exit code</label>
+        <span className="agent-step-inline">
+          <input id={`${id}-exit`} className="property-input agent-step-short" type="number" value={step.cmdexecSuccessCode} disabled={!editable}
+            onChange={event => update({ cmdexecSuccessCode: Math.max(-2_147_483_648, Math.min(2_147_483_647, Math.trunc(Number(event.target.value) || 0))) })} />
+          <span className="field-note">{stepText.successCode}</span>
+        </span>
+      </div>}
     </div>
     {step.subsystem === 'SSIS' && !ssisText && (!step.command.trim() || parseSsisCommand(step.command)) ? <SsisSection state={state} step={step} editable={editable} update={update} service={service} id={id} /> : <div className="agent-step-command">
       <div className="agent-step-command-head">
@@ -410,7 +454,7 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
           {isStepScriptSubsystem(step.subsystem) && <button type="button" disabled={!editable || state.stepFile?.running} onClick={() => void loadFile()}><Icon name="file" />{stepScriptText.load}</button>}
         </span>
       </div>
-      <StepCommandEditor epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
+      <StepCommandEditor owner={state.id} epoch={`${model.job?.jobId ?? 'new'} ${model.job?.version ?? 0} ${model.job?.modified ?? ''}`} stepKey={step.key} value={step.command} subsystem={step.subsystem} connectionId={service.connectionId(state.id)} {...step.subsystem === 'TSQL' && step.databaseName ? { database: step.databaseName } : {}}
         readOnly={!editable} label={`Step ${position + 1} command`} onChange={value => update({ command: value })} handle={commandEditor} />
       <FieldMessages text={command} id={`${id}-command`} />
       {stepFile?.failure && <p className="property-field-error" role="alert"><Icon name="error" />{stepFile.failure}</p>}
@@ -423,26 +467,44 @@ function StepEditor(props: StepsProps & { readonly step: AgentStepDraft; readonl
       <p className="field-note">{step.subsystem === 'TSQL' ? stepText.tsqlContext(step.databaseName || 'master')
         : step.subsystem === 'PowerShell' ? stepText.powerShellHelp(state.server, account) : step.subsystem === 'CmdExec' ? stepText.cmdExecHelp(state.server, account) : ''}</p>
     </div>}
-    <div className="agent-step-grid">
-      {serverSubsystems.has(step.subsystem) && <div className="agent-step-row">
-        <label htmlFor={`${id}-olap-server`}>Server</label>
-        <input id={`${id}-olap-server`} className="property-input" type="text" maxLength={128} spellCheck={false} value={step.server} disabled={!editable}
-          aria-invalid={server.error ? true : undefined} onChange={event => update({ server: event.target.value })} />
-        <FieldMessages text={server} id={`${id}-olap-server`} />
-      </div>}
-      {step.subsystem === 'CmdExec' && <div className="agent-step-row">
-        <label htmlFor={`${id}-exit`}>Success exit code</label>
-        <span className="agent-step-inline">
-          <input id={`${id}-exit`} className="property-input agent-step-short" type="number" value={step.cmdexecSuccessCode} disabled={!editable}
-            onChange={event => update({ cmdexecSuccessCode: Math.max(-2_147_483_648, Math.min(2_147_483_647, Math.trunc(Number(event.target.value) || 0))) })} />
-          <span className="field-note">{stepText.successCode}</span>
-        </span>
-      </div>}
-      <Target state={state} step={step} which="onSuccess" editable={editable} problems={problems} update={update} id={`${id}-success`} />
-      <Target state={state} step={step} which="onFail" editable={editable} problems={problems} update={update} id={`${id}-fail`} />
+    <div className="agent-step-foot">
+      <div className="agent-step-foot-targets">
+        <Target state={state} step={step} which="onSuccess" editable={editable} problems={problems} update={update} id={`${id}-success`} />
+        <Target state={state} step={step} which="onFail" editable={editable} problems={problems} update={update} id={`${id}-fail`} />
+      </div>
+      <MoreOptions step={step} model={model} editable={editable} problems={problems} update={update} id={`${id}-more`} />
     </div>
-    <MoreOptions step={step} model={model} editable={editable} problems={problems} update={update} id={`${id}-more`} />
   </div>
+}
+
+/** List | Flow: the same draft as a list beside the step's editor, or as a graph (Flow, Later in docs/agent-ui-rethink.md). Every document
+ *  opens on List. Forced colours replace the graph's colours, so Flow is then unavailable and says why. */
+// List draws the switch in its header and Flow in its toolbar, so the arrow keys' switch unmounts: the document whose switch the keyboard
+// moved, for the new one to take focus as it mounts.
+let switchFocus: string | undefined
+function ViewSwitch({ state, service, forced }: { readonly state: JobDocumentState; readonly service: JobDocumentService; readonly forced: boolean }) {
+  const flow = state.stepsView === 'flow' && !forced
+  const group = useRef<HTMLSpanElement>(null)
+  useEffect(() => {
+    if (switchFocus !== state.id) return
+    switchFocus = undefined
+    group.current?.querySelector<HTMLElement>('[role="radio"][aria-checked="true"]')?.focus()
+  }, [state.id])
+  const keyDown = (event: ReactKeyboardEvent<HTMLSpanElement>) => {
+    if (forced || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey) return
+    const next = segmentKey(event.key, 2, flow ? 1 : 0)
+    if (next === undefined) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (next === (flow ? 1 : 0)) return
+    switchFocus = state.id
+    service.setStepsView(state.id, next === 1 ? 'flow' : 'list')
+  }
+  return <span ref={group} className="segmented agent-steps-view" role="radiogroup" aria-label="Steps view" onKeyDown={keyDown}>
+    <button type="button" role="radio" className="segmented-option" aria-checked={!flow} tabIndex={flow ? -1 : 0} onClick={() => service.setStepsView(state.id, 'list')}><Icon name="list-flat" />List</button>
+    <button type="button" role="radio" className="segmented-option" aria-checked={flow} tabIndex={flow ? 0 : -1} disabled={forced} title={forced ? 'Flow draws in colours that forced colours replace; List shows the same steps.' : undefined}
+      onClick={() => service.setStepsView(state.id, 'flow')}><Icon name="type-hierarchy" />Flow</button>
+  </span>
 }
 
 /** The Steps section: the delete banner, the list and the selected step's editor. */
@@ -467,7 +529,10 @@ export default function JobSteps(outer: StepsProps) {
   }
   const types = props.model.subsystems?.length ? props.model.subsystems : [...mainTypes]
   const retargeted = deletion ? deletion.retargeted.map(key => steps.findIndex(step => step.key === key) + 1).filter(at => at > 0) : []
-  return <div className="agent-job-steps">
+  const forced = useForcedColors()
+  const switcher = <ViewSwitch state={state} service={service} forced={forced} />
+  const flow = state.stepsView === 'flow' && !forced
+  return <div className="agent-job-steps agent-job-steps-fill">
     {props.model.stepsTruncated && <p className="field-note" role="note"><Icon name="info" />{stepText.stepsTruncated}</p>}
     {deletion && <div className="agent-step-banner" role="status">
       <Icon name="trash" />
@@ -475,53 +540,72 @@ export default function JobSteps(outer: StepsProps) {
       <button type="button" disabled={!editable} onClick={() => service.undoDeleteStep(state.id)}>{stepText.undo}</button>
       <button type="button" aria-label="Dismiss" onClick={() => service.dismissDeletion(state.id)}><Icon name="close" /></button>
     </div>}
-    <div className="agent-step-body" data-agent-steps="">
-      <div className="agent-step-list">
-        <div role="listbox" aria-label="Steps" tabIndex={steps.length ? 0 : -1} aria-activedescendant={selected ? `agent-step-${state.id}-${selected.key}` : undefined}
-          onKeyDown={event => {
-            if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
-            event.preventDefault()
-            const at = selected ? steps.indexOf(selected) : -1
-            const next = steps[Math.max(0, Math.min(steps.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))]
-            if (next) service.selectStep(state.id, next.key)
-          }}>
-          {steps.length === 0 && <p className="field-note">{stepText.none}</p>}
-          {steps.map((step, at) => {
-            const own = problems.filter(problem => problem.key === step.key)
-            const errors = own.filter(problem => problem.severity === 'error').length
-            const changed = deletion?.retargeted.includes(step.key)
-            return <div key={step.key} id={`agent-step-${state.id}-${step.key}`} role="option" aria-selected={selected?.key === step.key} className="agent-step-item"
-              data-drop-before={over === at || undefined} draggable={editable || undefined}
-              onClick={() => service.selectStep(state.id, step.key)}
-              onDragStart={event => { event.dataTransfer.setData('application/x-varia-step', step.key); event.dataTransfer.effectAllowed = 'move'; setDragging(step.key) }}
-              onDragEnd={() => { setDragging(undefined); setOver(undefined) }}
-              onDragOver={event => { if (!dragging) return; event.preventDefault(); setOver(at) }}
-              onDrop={event => drop(event, at)}>
-              <span className="agent-step-no">{at + 1}</span>
-              <span className="agent-step-name">{step.name || 'Unnamed step'}</span>
-              <span className="agent-step-tags">
-                {draft.steps.startKey === step.key && <span className="agent-step-tag" data-tone="accent">Start step</span>}
-                {own.length > 0 && <span className="agent-step-tag" data-tone={errors ? 'error' : 'warning'}>{`${own.length} ${own.length === 1 ? 'problem' : 'problems'}`}</span>}
-                {changed && <span className="agent-step-tag" data-tone="warning">changed</span>}
-              </span>
-              <span className="agent-step-flow">
-                <span>{stepTypeShort(step.subsystem)}</span>
-                <span className="agent-step-ok"><Icon name="check" /><span className="visually-hidden">On success: </span>{stepTargetShort(draft.steps, step, 'success')}</span>
-                <span className="agent-step-bad"><Icon name="close" /><span className="visually-hidden">On failure: </span>{stepTargetShort(draft.steps, step, 'fail')}</span>
-              </span>
+    {flow ? <JobStepsFlow {...props} switcher={switcher} editor={(step, position) => <StepEditor {...props} step={step} position={position} problems={problems} />} /> : <div className="agent-step-body-wrap" data-agent-steps="">
+      <ResizableSplit
+        className="agent-job-steps-split"
+        railClassName="agent-step-list"
+        mainClassName="agent-step-main"
+        side="left"
+        storageKey="agent.job.steps"
+        defaultWidth={304}
+        minWidth={252}
+        maxWidth={480}
+        minOtherWidth={360}
+        label="Resize steps list"
+        railLabel="Steps list"
+        rail={<>
+          <div className="agent-step-list-head"><span>Steps</span>{switcher}</div>
+          <div role="listbox" aria-label="Steps" tabIndex={steps.length ? 0 : -1} aria-activedescendant={selected ? `agent-step-${state.id}-${selected.key}` : undefined}
+            onKeyDown={event => {
+              if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return
+              event.preventDefault()
+              const at = selected ? steps.indexOf(selected) : -1
+              const next = steps[Math.max(0, Math.min(steps.length - 1, at + (event.key === 'ArrowDown' ? 1 : -1)))]
+              if (next) service.selectStep(state.id, next.key)
+            }}>
+            {steps.length === 0 && <p className="field-note">{stepText.none}</p>}
+            {steps.map((step, at) => {
+              const own = problems.filter(problem => problem.key === step.key)
+              const errors = own.filter(problem => problem.severity === 'error').length
+              const changed = deletion?.retargeted.includes(step.key)
+              const okTarget = stepTargetShort(draft.steps, step, 'success')
+              const failTarget = stepTargetShort(draft.steps, step, 'fail')
+              return <div key={step.key} id={`agent-step-${state.id}-${step.key}`} role="option" aria-selected={selected?.key === step.key} className="agent-step-item"
+                data-drop-before={over === at || undefined} draggable={editable || undefined}
+                onClick={() => service.selectStep(state.id, step.key)}
+                onDragStart={event => { event.dataTransfer.setData('application/x-varia-step', step.key); event.dataTransfer.effectAllowed = 'move'; setDragging(step.key) }}
+                onDragEnd={() => { setDragging(undefined); setOver(undefined) }}
+                onDragOver={event => { if (!dragging) return; event.preventDefault(); setOver(at) }}
+                onDrop={event => drop(event, at)}>
+                <span className="agent-step-no">{at + 1}</span>
+                <span className="agent-step-name">{step.name || 'Unnamed step'}</span>
+                <span className="agent-step-tags">
+                  {draft.steps.startKey === step.key && <span className="agent-step-tag" data-tone="accent">Start step</span>}
+                  {own.length > 0 && <span className="agent-step-tag" data-tone={errors ? 'error' : 'warning'}>{`${own.length} ${own.length === 1 ? 'problem' : 'problems'}`}</span>}
+                  {changed && <span className="agent-step-tag" data-tone="warning">changed</span>}
+                </span>
+                <span className="agent-step-flow">
+                  <span className="agent-step-type" title={stepTypeLabel(step.subsystem)}>{stepTypeBadge(step.subsystem)}</span>
+                  <span className="agent-step-ok" title={`On success: ${okTarget}`}><Icon name="check" /><span className="visually-hidden">On success: </span><span className="agent-step-target">{okTarget}</span></span>
+                  <span className="agent-step-bad" title={`On failure: ${failTarget}`}><Icon name="close" /><span className="visually-hidden">On failure: </span><span className="agent-step-target">{failTarget}</span></span>
+                </span>
+              </div>
+            })}
+            {dragging && <div className="agent-step-drop-end" data-drop-before={over === steps.length || undefined} onDragOver={event => { event.preventDefault(); setOver(steps.length) }} onDrop={event => drop(event, steps.length)} />}
+          </div>
+          <div className="agent-step-list-foot">
+            <div className="agent-step-add">
+              <button type="button" disabled={!editable || steps.length >= agentLimits.stepsPerJob} title={steps.length >= agentLimits.stepsPerJob ? stepText.tooMany : undefined} onClick={() => service.addStepOf(state.id, adding)}><Icon name="add" />Add step</button>
+              <select className="property-input" aria-label="Type of the step to add" value={adding} disabled={!editable} onChange={event => setAdding(event.target.value)}>
+                {types.map(type => <option key={type} value={type}>{stepTypeShort(type)}</option>)}
+              </select>
             </div>
-          })}
-          {dragging && <div className="agent-step-drop-end" data-drop-before={over === steps.length || undefined} onDragOver={event => { event.preventDefault(); setOver(steps.length) }} onDrop={event => drop(event, steps.length)} />}
-        </div>
-        <div className="agent-step-add">
-          <button type="button" disabled={!editable || steps.length >= agentLimits.stepsPerJob} title={steps.length >= agentLimits.stepsPerJob ? stepText.tooMany : undefined} onClick={() => service.addStepOf(state.id, adding)}><Icon name="add" />Add step</button>
-          <select className="property-input" aria-label="Type of the step to add" value={adding} disabled={!editable} onChange={event => setAdding(event.target.value)}>
-            {types.map(type => <option key={type} value={type}>{stepTypeShort(type)}</option>)}
-          </select>
-        </div>
-        <p className="field-note">{stepText.dragHint}</p>
-      </div>
-      {selected ? <StepEditor {...props} step={selected} position={steps.indexOf(selected)} problems={problems} /> : <div className="agent-step-edit" />}
-    </div>
+            <p className="field-note">{stepText.dragHint}</p>
+          </div>
+        </>}
+      >
+        {selected ? <StepEditor {...props} step={selected} position={steps.indexOf(selected)} problems={problems} /> : <div className="agent-step-edit" />}
+      </ResizableSplit>
+    </div>}
   </div>
 }

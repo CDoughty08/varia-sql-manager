@@ -1140,7 +1140,7 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     wb.dispose()
   })
 
-  it('R10 D3 #4 & #5: edit.refreshIntelliSense and explorer multi-select commands report accurate unavailable reasons when connected', () => {
+  it('R10 D3 #4 & #5: edit.refreshIntelliSense and explorer multi-select commands report accurate unavailable reasons when connected', async () => {
     const wb = workbenchFixture()
     wb.api.push(readyBackend())
     wb.api.explorerChildren.mockImplementation(async () => ({ ok: true as const, value: { nodes: [], elapsedMs: 1, total: 0 } }))
@@ -1164,24 +1164,34 @@ describe('Wave 2c: End-to-end contribution & wiring integration', () => {
     const bqDoc = wb.documents.create('SoloBq.sql', 'SELECT 1;', 'analytics', bq1.info.id)
 
     const commands = new CommandService({ state: () => wb.context.getState() })
+    const sqlRefresh = vi.fn(async () => true)
+    const bqRefresh = vi.fn(async () => true)
     const langContrib = languagesContribution({
       commands,
       documents: wb.documents,
       connections: wb.connections,
-      sqlLanguage: { refreshCache: vi.fn(async () => true) }
+      sqlLanguage: { refreshCache: sqlRefresh },
+      indexCompletion: { refreshCache: bqRefresh }
     })
     const expContrib = explorerContribution(
       { commands, documents: wb.documents, connections: wb.connections, explorer: wb.explorer },
       wb.api
     )
 
-    // R10 D3 #4: GoogleSQL pane of Cross-Engine Split & solo BigQuery tab report accurate SQL-Server-only reasons.
+    // GoogleSQL pane of Cross-Engine Split & solo BigQuery tab route edit.refreshIntelliSense to BigQuery indexCompletion.
+    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: crossDoc.id })).toBe(true)
+    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: bqDoc.id })).toBe(true)
+    await commands.execute('edit.refreshIntelliSense', { tabId: crossDoc.id }, 'palette')
+    await commands.execute('edit.refreshIntelliSense', { tabId: bqDoc.id }, 'palette')
+    expect(bqRefresh).toHaveBeenCalledWith(crossDoc.id)
+    expect(bqRefresh).toHaveBeenCalledWith(bqDoc.id)
+    expect(sqlRefresh).not.toHaveBeenCalled()
+
+    // Cross-Engine File mode pauses per-dialect IntelliSense and reports the switch-to-Split reason.
+    wb.documents.setCrossView(crossDoc.id, 'file')
     expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: crossDoc.id })).toBe(false)
-    expect(commands.isEnabled('edit.refreshIntelliSense', { tabId: bqDoc.id })).toBe(false)
     expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: crossDoc.id }))
-      .toBe('Focus the Transact-SQL pane to refresh SQL Server IntelliSense cache.')
-    expect(commands.unavailableReason('edit.refreshIntelliSense', { tabId: bqDoc.id }))
-      .toBe('Refresh Local Cache is available for SQL Server queries only.')
+      .toBe('Switch to Split view for per-dialect IntelliSense and syntax checking.')
 
     // R11 D3 #5: With 1 SQL Server + 1 BigQuery (canMultiSelect === false), newMultiServerQuery says to connect two of the same engine.
     wb.connections.disconnected(sql2.info.id)

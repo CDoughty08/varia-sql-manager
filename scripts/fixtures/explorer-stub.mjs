@@ -17,7 +17,7 @@ import { explorerStatics } from './explorer-tree.mjs'
  *   (dbo.usp_ShipOrders first), each with an empty Parameters folder, held while `holdParameters` is set.
  * - Peek's Top rows (query.execute with maxRows 10): fail once, then answer ten synthetic W1 rows (the backend's test hooks).
  * - The object index (explorer.index, explorer.search) holds dbo.Orders, dbo.usp_ShipOrders, dbo.Orders.trg_Orders, dbo.table1 and
- *   dbo.table2.
+ *   dbo.table2; while `indexLeftOut` is set, a build's status says definitions were left out for memory.
  */
 export function explorerStubData() {
   return { statics: explorerStatics() }
@@ -30,6 +30,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     tables: 120_000, views: 10_000, pageSize: 2000, pageDelayMs: 0, holdTablePages: false, auditsOk: false, holdLinked: true, tablesError: undefined, procedures: 0, holdParameters: false,
     // holdSearch: explorer.search answers only on release(); searchHidden: names the index leaves out of its answers.
     holdSearch: false, searchHidden: [],
+    // indexLeftOut: { leftOut, leftOutIn } makes the next builds' status report definitions left out for memory.
+    indexLeftOut: undefined,
     release() { for (const [id, resolve] of [...stub.held]) { stub.held.delete(id); resolve() } }
   }
   const ok = value => ({ ok: true, value })
@@ -124,7 +126,8 @@ export function installExplorerStub({ ipcMain }, { statics }) {
     { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table1' }, folder: 'tables', label: 'dbo.table1' },
     { object: { kind: 'table', database: 'AppData', schema: 'dbo', name: 'table2' }, folder: 'tables', label: 'dbo.table2' }
   ]
-  const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z' })
+  const indexStatus = definitions => ({ state: 'ready', databases: 2, indexed: 2, objects: searchObjects.length, modules: definitions ? 1 : 0, cut: stub.indexLeftOut?.leftOut ?? 0, skipped: [], definitions, builtAt: '2026-11-03T12:00:00Z',
+    ...stub.indexLeftOut ?? {} })
   // Fuzzy Match stands in as a subsequence: a name holding the text's letters in order, but not the text, is approximate.
   const approximately = (name, text) => { let at = 0; for (const c of name.toLowerCase()) if (c === text[at]?.toLowerCase()) at++; return at === text.length }
   function search({ text, caseSensitive, wholeWord, regex, in: scope = 'all', kinds, match: mode, database }) {

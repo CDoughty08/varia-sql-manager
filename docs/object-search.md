@@ -43,11 +43,20 @@ right-click (which selects the hit), or Shift+F10 or the context-menu key on the
 
 ## The index
 
-- **Lifetime.** Backend memory only, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
-  Rebuild Search Index, dropped on disconnect or backend exit. With the setting off nothing else builds one: the search
-  says "This server has no index yet." with **Build index** (**Build indexes** on All servers).
-- **Progress.** The status bar shows "Indexing objects N / M" and Stop. A newer build of the same connection stops the
-  older one.
+- **Lifetime.** Held in backend memory, one per connection; built on connect (`objectExplorer.search.indexOnConnect`) or by
+  Rebuild Search Index, dropped on disconnect or backend exit. What a build reads is also saved to disk
+  ([Saved index](#saved-index)); a BigQuery connection's first build reads its saved datasets back before anything else, and
+  a SQL Server connection's first build reads back each database whose fingerprint still matches
+  ([Reloading a SQL Server index](#reloading-a-sql-server-index)). While connected it is kept current by checks rather than
+  rebuilt ([Freshness](#freshness)). With the setting off nothing else builds one: the search says "This server has no
+  index yet." with **Build index** (**Build indexes** on All servers).
+- **Progress.** The status bar shows "Indexing objects N / M" and Stop (a BigQuery build names its pass instead; see
+  BigQuery below). A newer build of the same connection stops the older one.
+- **Stopped builds.** What a stopped build read stays searchable: the index line reports it with "· build stopped" and
+  offers **Build index** until a full build finishes (the window reads the status with `explorer.indexStatus`). A new build
+  lists everything again, so drops and additions are seen, but on BigQuery it reuses the details already held of objects
+  whose creation and modification times are unchanged, so only the names are listed again for them; a dataset whose details
+  were still being read when the build stopped is read again.
 - **Reading.** First the server's objects, in one constant batch on the server's connection, then every online database
   the login can open (`HAS_DBACCESS`, not snapshots or `tempdb`), two at a time; an unexpected failure stops the other
   read in flight. Each database is one constant batch of catalog views on the
@@ -68,7 +77,7 @@ Each hit carries Object Explorer's ref and folder, so it can be revealed and scr
 | Server | Every database (under Databases, System Databases or Database Snapshots, any state); on box editions and Managed Instance also logins, server roles, credentials, cryptographic providers, audits, server audit specifications, backup devices, linked servers and server triggers. |
 | Database | Users, database and application roles, schemas, assemblies, asymmetric and symmetric keys, certificates, column master and encryption keys, database audit specifications, database triggers, external data sources and file formats, full-text catalogs and stoplists, partition schemes and functions, search property lists, plan guides. |
 | Schema | Tables (in Tables, FileTables, External Tables, Graph Tables or Dropped Ledger Tables), views, synonyms, procedures (T-SQL, CLR, extended, replication-filter), scalar, table-valued and aggregate functions, sequences, user-defined data and CLR types, table types, XML schema collections, rules, defaults, security policies. |
-| Children | Columns, keys, constraints, DML triggers, indexes, statistics and parameters under their table, view, table type, procedure or function, only where Object Explorer lists such a folder. Label `schema.parent.name`; the hit names the parent's folder. Columns are those the Columns folder shows (no graph hidden or dropped ledger columns), and system functions' columns and parameters are left out. |
+| Children | Columns, keys, constraints, DML triggers, indexes, statistics (not the ones SQL Server creates by itself, `_WA_Sys_...`) and parameters under their table, view, table type, procedure or function, only where Object Explorer lists such a folder. Label `schema.parent.name`; the hit names the parent's folder. Columns are those the Columns folder shows (no graph hidden or dropped ledger columns), and system functions' columns and parameters are left out. |
 | SQL Server Agent | On SQL Server connections: the jobs the login may read in `msdb.dbo.sysjobs_view` (none, and no error, for a login in no Agent role), and where msdb lets it read them (SQLAgentOperatorRole or sysadmin) operators and, where the Alerts folder is served (Windows), alerts. They name no database and reveal below the server's SQL Server Agent node. |
 | History tables | A temporal or ledger history table and its columns, indexes and statistics name the table whose history row shows it, and Reveal walks there. A dropped ledger table's history is left out. |
 
@@ -127,13 +136,21 @@ the reads held when it is made:
 
 A BigQuery connection's index answers through `LookupBigQuery` instead (`BigQueryLookup`), which the editor reaches over
 `language.lookup` ([Completion from the index](language-services.md#completion-from-the-index)): the connection's
-projects (billing first, then starred and discovered accessible projects, marked when read by name only), a project's datasets, a dataset's objects (a
-sharded group as its newest shard, a routine with its signature) and an object's facts and columns by field path in
-schema order. Projects, datasets and objects match exactly, else the one name that differs only in case; a wildcard
-(`events_*`, `events_2026*`) or a shard within a date-sharded group's range answers with the group's newest shard; the
-prefix matches with case, a group the wildcard covers whole wins over the tables and groups it only begins
-(`events_summary`, `events_intraday_`), and otherwise a wildcard that begins two groups, or a group and a plain table,
-answers nothing. A dataset's state is `Ready`,
+projects ordered **Billing → ★ Starred → Recently Queried → Discovered** (guaranteeing Billing and Starred projects are
+never truncated behind the default 500-item page cap, with `tier`, `recent`, `namesOnly`, `indexing`, and `partial`
+markers), a project's datasets, a dataset's objects (a sharded group as its newest shard, a routine with its signature,
+and optional table summary facts `rows`, `bytes`, `partitioning`, `clustering`, and clipped `description` when detailed),
+an object's facts and columns by field path in schema order, and a bounded cross-project fuzzy table jump
+(`mode: 'jump'`, up to 50 hits across RAM-indexed datasets ranked **Default dataset → Billing → ★ Starred → Recently
+Queried → Discovered**). Referenced objects whose details are not yet in RAM (Wave 3 pending, memory-capped `namesOnly`,
+or explicitly requested external/public tables) can be hydrated individually via `language.hydrate` using free REST
+`tables.get` / `routines.get` calls, cached into `DatabaseIndex` under the shared memory budget (with a short negative
+cache for 404/403 and per-connection rate limiting). Index builds, scoped refreshes, and DDL-stale updates
+invalidate the editor's `LookupCache` immediately for the affected connection. Projects, datasets and objects match
+exactly, else the one name that differs only in case; a wildcard (`events_*`, `events_2026*`) or a shard within a
+date-sharded group's range answers with the group's newest shard; the prefix matches with case, a group the wildcard
+covers whole wins over the tables and groups it only begins (`events_summary`, `events_intraday_`), and otherwise a
+wildcard that begins two groups, or a group and a plain table, answers nothing. A dataset's state is `Ready`,
 `Partial` (children left out, its project read by name only, its details skipped, or a later read failed with an earlier
 one kept), `Building`, `Skipped` or `Absent`; a project is `Partial` when its dataset listing failed after earlier reads or
 a listed dataset's read failed.
@@ -150,9 +167,10 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 
 ### Memory
 
-- All connections share one budget. Each object is a packed 24-byte entry in its database's `ObjectTable`; names and
-  definitions live in one reference-counted pool shared by every connection, so each distinct text (msdb's procedures,
-  master's `spt_` objects, common column names) is held and charged once.
+- All connections share one budget, Options › SQL Server Object Explorer › Commands › Index memory limit
+  (`objectExplorer.search.memoryLimitMiB`, 512 MiB by default, 64 to 16,384). Each object is a packed 24-byte entry in
+  its database's `ObjectTable`; names and definitions live in one reference-counted pool shared by every connection, so
+  each distinct text (msdb's procedures, master's `spt_` objects, common column names) is held and charged once.
 - A definition of 512 characters or more is held compressed (`PackedText`: one zstd frame of its UTF-8 text, level 3),
   about a seventh of the string on real module definitions, and charged at its compressed size. The same text always
   compresses to the same frame, so the pool still holds a definition shared by several databases or servers once. A
@@ -162,16 +180,65 @@ States come from the build's skip list, which keeps the first 255 skips and the 
   each million or so characters it unpacks, as well as every 64 objects. Packing a definition as it is read borrows
   pooled buffers of a few times its size while it compresses. Shorter definitions (defaults, most computed columns)
   stay strings, and so does a text with an unpaired surrogate, which UTF-8 cannot hold exactly.
-- Once less than 128 MiB is free, definitions stop being kept: a build reads at most each one's first 256 characters,
-  only to keep short texts already pooled (a default's `((0))`); others are counted as cut. A rebuild may reuse its
-  predecessor's memory (and reads definitions whole while that share is left), so a database that fitted still fits.
+- Once less than a quarter of the limit (the names' reserve, 128 MiB at the default) is free, definitions stop being
+  kept: a build reads at most each one's first 256 characters, only to keep short texts already pooled (a default's
+  `((0))`); others are counted as cut and as left out for memory. A rebuild may reuse its predecessor's memory (and reads
+  definitions whole while that share is left), so a database that fitted still fits.
+- **BigQuery leaves SQL Server its room.** What a BigQuery index takes must leave a floor of the budget free, each floor
+  above the names' reserve, so however much BigQuery metadata is indexed, and whichever connection was built first, a
+  SQL Server database still finds room for its definitions. The floors are parts of the limit, and BigQuery gives way
+  in this order: discovered projects' columns and view and routine text keep half the limit free (256 MiB at the
+  default), the billing and starred projects' 7/16 (224 MiB), and everything else BigQuery holds (names, records, its
+  lookup arrays) 3/8 (192 MiB). So BigQuery uses at most 5/8 of the limit less what SQL Server holds, and SQL Server
+  always has at least an eighth of the limit (64 MiB) for names and definitions before a definition is left out, in
+  practice more, since details stop well before names do. A floor only refuses BigQuery: SQL Server's reads take
+  whatever is free, which also means SQL Server's use counts against BigQuery's room: with SQL Server holding 5/8 of
+  the limit or more (or the two engines together), a BigQuery index reads nothing new, and says why.
+- **What a BigQuery dataset holds, it keeps.** A rebuild or refresh charges the share of the read it replaces, names
+  to the part its names held and details (columns, signatures, layout, text slots) to the rest, so a new object's name
+  does not push a held column out of that share; each part lends to the other only once the budget has refused, so a
+  read no larger than the one it replaces always fits. Pass 1 goes on holding, by name (a date-sharded group by its
+  prefix, since a new shard renames its entry; not across a table becoming a group or the reverse), the details of the
+  objects pass 2 is about to read again (a forced read's, a table created again, one not read whole), marked so that a
+  build stopped or a read that fails in between leaves nothing a later build reuses. A
+  dataset that already holds details keeps one floor less free than its project's (7/16 for a discovered project, 3/8
+  for the billing and starred projects) for whatever details it reads, so what it holds can grow, and
+  discovered datasets that hold details are read before the half-free line is checked, whatever the names pass found.
+  An object whose pass 2 read fails keeps the details it had, to be read again by the next build, unless it was
+  created or changed since, whose carried details were another generation's and are dropped (a date-sharded group is
+  the same table whatever its newest shard). When pass 2's read of the dataset does not fit even there, objects go back
+  to what the dataset held of them (nothing, for a new one), in this order until the read fits: the new objects; those
+  whose details grew; the one the read ran out of room at (a column renamed in place), up to 16 times; then every
+  object. An object no larger than before keeps what pass 2 read (one created again keeps it only when its columns are
+  the same). Either way the dataset keeps what it held, lists what is new by
+  name, and reports details missing. In pass 1, when the names of what is new do not fit beside what it holds (a new
+  name's text is always new memory), the dataset is left as it was read before (skipped as `TOO_LARGE`, its earlier
+  read kept) until there is room. A new dataset of a discovered project that does not fit stops the names pass for new
+  datasets only: datasets the index already holds are still listed and read; details carried from a build stopped
+  between its passes stay until a build's pass 2 reads them again. A
+  read never swaps a dataset that holds details for one without them: only a dataset that holds none is kept without
+  its columns (`CHILDREN_LEFT_OUT`). A read of one project or dataset (Refresh, or a project a search hit reveals)
+  uses the billing and starred floors, whatever the project.
+- **When memory runs out, the index says so.** The status counts the definitions left out for memory (`leftOut`) and
+  the databases or datasets they belong to (`leftOutIn`; the server's own and the system objects are in none), apart
+  from definitions only cut at their length and from turning `objectExplorer.search.definitions` off. The index line
+  adds "N definitions left out (not enough index memory)", which keeps the line in view in Object
+  Explorer's band; below it in the tab, and in the band's Search and index details, a note says a search inside
+  definitions misses them and names the option to raise. The same note shows when children were left out, a database or
+  dataset did not fit, or BigQuery projects were read by name only. The system objects are shared between servers: a
+  set whose definitions were left out is read again by the next build that finds room above the names' reserve.
+- **Changing the limit.** Each `explorer.index` carries the option's value (`memoryLimitMiB`), so a change applies from
+  the next build of any connection, with the reserve and floors in proportion. Raising it lets that build use the room.
+  Lowering it drops nothing: a rebuild reuses its predecessor's share, so an index over the new limit keeps what it has
+  (the Memory panel then shows more than 100 %) and takes nothing new, so a database that has grown since is kept
+  without its children, or skipped, at its next read; an index gives its memory back when its server disconnects.
 - The editor metadata is charged per item: 13 bytes a typed column, parameter or function, 14 an index or key,
   5 a key column and 16 a type. On msdb that is about 85 KB (5,600 columns and parameters, 460 indexes and foreign keys,
   840 key columns) beside about 195 KB of entries.
 - A database's first editor lookup builds its lookup arrays (names, children by parent, and foreign keys by the table
   they reference, 4 bytes per entry and per such foreign key), charged until its read is replaced or dropped; where the
-  budget cannot take them, lookups scan the table instead. The Memory panel counts them with the records, walking the
-  index again once they are built.
+  budget cannot take them (for a BigQuery dataset, above its names floor), lookups scan the table instead. The Memory
+  panel counts them with the records, walking the index again once they are built.
 - A database that does not fit with its children is read again without columns, indexes, statistics and parameters
   (status: `CHILDREN_LEFT_OUT`); one that still does not fit is skipped as `TOO_LARGE`. A read that runs out of room
   cancels its batch at once.
@@ -180,8 +247,11 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 
 | Limit | Value |
 |---|---|
-| Memory across all connections (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 512 MiB |
-| Memory definitions leave free for names | 128 MiB |
+| Memory across all connections (past it, a database is kept without its children, or skipped as `TOO_LARGE`) | 512 MiB by default, 64 to 16,384 MiB (`objectExplorer.search.memoryLimitMiB`) |
+| Memory definitions leave free for names | 1/4 of the limit (128 MiB) |
+| Memory a BigQuery index's names, records and lookup arrays leave free | 3/8 of the limit (192 MiB) |
+| Memory the billing and starred projects' details leave free | 7/16 of the limit (224 MiB) |
+| Memory discovered projects' details leave free | 1/2 of the limit (256 MiB) |
 | Characters kept per definition (longer ones are cut and marked) | 1,000,000 |
 | Databases read at once | 2 |
 | Time per database | 120 s |
@@ -195,6 +265,238 @@ States come from the build's skip list, which keeps the first 255 skips and the 
 | Characters per Fuzzy Match word (a longer word: exactly only) | 64 |
 | Matches counted per definition | 999 |
 | Preview length | 160 characters |
+
+## Saved index
+
+Every part of an index is saved to disk as soon as it has been read, so that an index need not be read from its server
+again after a restart. A BigQuery connection reads its saved index back at once ([Reloading a BigQuery
+index](#reloading-a-bigquery-index)); a SQL Server connection reads a saved database back only after a check against the
+server says it is unchanged, or reads again only what changed ([Reloading a SQL Server
+index](#reloading-a-sql-server-index)).
+
+- **What a file is.** One unit of an index: a SQL Server database's read, a server's own objects, SQL Server Agent's
+  objects, a BigQuery dataset's read, or a shared set of system objects. Each is a file of its own
+  (`<32 hex>-<32 hex>.vidx`) in the `SearchIndex` folder of the Varia profile (the user-data directory), written to a
+  temporary file and renamed into place, so a crash or a stop leaves the earlier file or none. The whole index is
+  saved, definitions included, compressed.
+- **Encryption.** Files are AES-256-GCM under a 32-byte key that Varia makes on first use and keeps only in the operating
+  system's key store form: the key's ciphertext (DPAPI on Windows, the Keychain on macOS, the Secret Service or KWallet
+  on Linux) in `search-index-key.json` beside the saved passwords. Only the main process reads it and hands it to the
+  backend in memory; the window never sees the key or the folder. If the key store is reset so the ciphertext no longer
+  opens, that file is set aside, a new key is made, and the files written under the old key are deleted by the sweep.
+- **No key store.** Where the system has none (Linux without GNOME Keyring or KWallet), nothing is saved, and Options
+  says so beside the settings. A keyring that is there but not reachable yet (locked, or a prompt nobody has answered)
+  is not taken for none: nothing is saved or deleted meanwhile, and Varia asks it again a little later. Nor does
+  anything happen to the saved index before Varia has read its settings, or while one of the three was reset because
+  `settings.json` could not be read. **Save index unencrypted when there is no key
+  store** opts in to saving in clear text there: the names of your servers' objects and the text of their procedures,
+  functions and views are then readable by any program or person that can read your files. Passwords, connection
+  strings and tokens are never part of an index. Turning the option off again, or a key store coming back, deletes the
+  unencrypted files.
+- **Whose file it is.** A file's name and the identity inside it are keyed hashes, never a server's, database's,
+  project's, dataset's, login's or principal's name, so the folder's listing says nothing about your servers.
+  - SQL Server: the server as it names itself (`SERVERPROPERTY('ServerName')`) and the account that signed in (its
+    SID, or an Entra account's tenant and object ids). Two connection profiles that reach one server as one login share
+    its files; another login, whose view of the catalog is its own, never does. A contained database user, and any
+    connection to Azure SQL Database (where a connection sees the catalog from one database), also counts the database
+    it opened. A connection whose server name or account the connect probe could not establish saves nothing.
+  - BigQuery: the verified principal alone. A dataset's file is shared by every connection of that principal,
+    whatever its billing project.
+  - The shared system objects: their own fingerprint (version, edition, and what the login sees of them).
+  - Two servers that report the same name and are signed in to with the same SID (`sa` on two containers with one host
+    name, say) count as one: each one's build overwrites the other's files.
+- **What is saved, and what is not.**
+
+  | Read | Saved |
+  |---|---|
+  | A database, the server's objects or Agent's objects, read whole | Yes, replacing the unit's earlier file |
+  | A database kept without its children (`CHILDREN_LEFT_OUT`), or read with definitions off | Yes; the file's header says what it lacks, so it is never taken for a whole read |
+  | A read with definitions left out for memory | Yes, with the count of what was left out |
+  | A read that failed part way (kept because nothing was held before) | No; an earlier file of the unit stays as it is |
+  | A database skipped (`TOO_LARGE`, `TIMEOUT`, an error) | Nothing new; an earlier file stays |
+  | A database the server no longer lists, while its index holds it | Its file is deleted (one not held this session goes by the sweep's age and limit rules) |
+  | A BigQuery dataset after its names are listed (pass 1) | Yes; the file says how many objects' details are still to read |
+  | The same dataset once its details are read (pass 2) | Yes, in its place; it counts details that failed or were left out for memory, and whether the listing was cut. Each object's own facts say whether its details are whole |
+  | A dataset DDL marked stale | Its file is deleted at once, and saved again by the build that reads it afterwards. A read begun before the DDL is not saved by any connection of the principal, whichever of them ran it and whether or not it indexes the project; DDL that may have touched any dataset of a project does the same for all of them |
+  | A dataset its project no longer lists | Its file is deleted, whether the index holds it or its file was not loaded |
+  | A dataset a listing finds as its file was made, with nothing left to read | Nothing new; the file is marked used |
+  | A project that left what this connection indexes (no longer starred, or filtered) | Its files stay for the principal's other connections |
+
+- **Saving never waits on anything else.** One background thread writes one file at a time at low priority. A unit read
+  again while its save is queued is written once, as the newest read, and a newer read stops an older write of the same
+  unit. A disconnect frees the index's memory at once: the write in progress finishes, and what was still queued is not
+  written, since the queue never keeps alive what the index memory limit no longer counts (the next build saves it). A
+  read the index replaces or drops is withdrawn from the queue the same way. A deletion (a database the server stopped
+  listing, DDL) goes ahead of any queued save. A backend stop cancels the write in progress and writes nothing more, but
+  still does the deletions queued. What an index already holds when saving starts
+  (a connection restored at startup may build before the app has told the backend where the saved index lives; saving
+  turned on again; a new key) is saved then, without a rebuild.
+- **Bounds.** **Saved index disk limit** (`objectExplorer.search.diskLimitMiB`, 2,048 MiB by default, 64 to 262,144)
+  is the most the folder's index files take; past it the least recently used files are deleted first, and lowering the
+  limit deletes down to it at once. A file not used for 30 days (saved, or later loaded) is deleted whatever the space.
+- **The sweep** only deletes, when the store opens and again while it saves: temporary files a crash left (older than
+  an hour, so another Varia's save in progress is left alone), files unused for 30 days, files that do not open under
+  the current key or format version or whose content is not the unit their name says, then the least recently used
+  until the folder is under its limit. It touches only regular files directly in the `SearchIndex` folder that have
+  the store's own names: any other file there, a directory, a link, or an index file shorter than a file header is
+  neither opened nor deleted, and a file that cannot be deleted (another program holds it) is skipped. Two Varias sharing a
+  profile only ever replace whole files and delete, so neither damages the other's.
+- **Turning it off.** **Save index between sessions** (`objectExplorer.search.saveIndex`, on by default) off stops
+  saving and deletes every saved index. All three settings apply at once, without a restart.
+- **Clear Saved Search Indexes** (the command palette) deletes every saved file and reports how many. The indexes in
+  memory stay, and their next builds save again. Before the backend has been told where the saved index lives (Varia is
+  waiting for its settings or for the key store), it says so and deletes nothing.
+- **Deletions while nothing is saved.** A database the server stops listing, or BigQuery DDL, while the store does not
+  save (just after start, while the key store has not answered, without a key store) is remembered, and its file
+  deleted once the store saves again in that session.
+- **Where it shows.** The Memory panel's Search Indexer row has a **Saved on disk** line: the files and their size
+  against the limit, and Encrypted, Not encrypted (your choice in Options), Off in Options, Off: this system has no key
+  store, or Unavailable when the folder cannot be used ([status-bar-memory.md](status-bar-memory.md)).
+
+### Reloading a BigQuery index
+
+A BigQuery project can hold thousands of datasets and hundreds of thousands of objects, whose details cost one
+`tables.get` or `routines.get` each. So a BigQuery connection's first full build loads what its principal saved before it
+makes any call, and its listings then check it:
+
+- **Searchable at once.** The saved datasets of the billing project, then of the starred projects, then (with all
+  accessible projects indexed) of every other project are loaded one by one and searchable as each lands, before the
+  first listing. Discovery then drops the projects it no longer finds, as it drops ones read this session (their files
+  stay). While the build checks them, the index line, in the Search Objects tab and in Object Explorer's band, ends with
+  "Index saved 2 h ago, checking." (the oldest dataset loaded that no listing has checked yet). A build that ends
+  without checking some of them (a project whose listing failed) says "saved 2 h ago, not checked", and the line stays
+  in view.
+- **What a listing costs.** Each dataset is listed again (`tables.list`, `routines.list`, `models.list`), as every build
+  lists it. Only an object that is new, created again (its creation time changed), or a routine or model whose last
+  change moved, has its details read; the rest keep the details the file held. A dataset whose file says details were
+  still to read, failed or were left out for memory reads those objects' details alone. A listing that finds the dataset
+  as its file was made (the same objects, creation times and changes, and nothing left to read) leaves the loaded read
+  as it is and only marks the file used, so an unchanged dataset is never written again; a changed one is saved in its
+  place. A dataset its project no longer lists has its file deleted, loaded or not.
+- **Memory.** A loaded dataset is charged as a read of it is, under BigQuery's part of the index's memory (its
+  [floors](#memory)); one that does not fit whole is loaded with its names only, and one that does not fit even so stays
+  on disk and is read as if nothing were saved. Once a discovered project's dataset does not fit, no other discovered one
+  is loaded, as the names pass stops reading new discovered datasets.
+- **Stale marks win.** A dataset DDL from any of the principal's connections marked stale is never loaded: its file is
+  being deleted, and the build reads it whole. Nor is one whose newer save or deletion is still queued. A held dataset
+  (loaded or read) that DDL from any of the principal's connections marks stale afterwards is read whole by its next
+  listing.
+- **Failures are values.** A file that does not open (damaged, another key, another version's format), or does not load
+  (memory), is counted and its dataset read from BigQuery as if nothing were saved; the build never fails for a file.
+- **In-place changes.** A change that keeps an object's creation time, such as `ALTER TABLE ... ADD COLUMN` run outside
+  Varia or a view's text patched in place, is not seen by a listing. It is seen when the object's details are read
+  anyway or by the background re-read ([Freshness](#freshness)), or at once with Object Explorer's Refresh. DDL run from
+  Varia's query tabs marks the dataset stale and is seen.
+- **When.** Once per connection, at its first full build while the saved index can be read. A build that starts before
+  the app has told the backend where the saved index lives (just after start) loads nothing, and a build stopped while
+  it loads leaves the rest; the connection's next full build loads them.
+
+### Reloading a SQL Server index
+
+A saved SQL Server database is never searchable before the server has confirmed it. A connection's first build checks each
+database it would read, before reading it, in up to three steps of constant catalog SQL that a login able to read the
+database's catalog can run:
+
+- **Fingerprint.** One row: the database's identity (its id, creation time, Service Broker GUID and collation) and the
+  count, latest change and checksum of its objects, users, roles, schemas, keys and the rest of what the index names,
+  user types (a type created again under its name counts as changed), DDL triggers, plan guides and the statistics the index keeps. Another database under the same name (dropped
+  and created again, or restored over it) is read whole, as is a file saved with another **Index module definitions**
+  or children setting, or one with no fingerprint this version reads. The fingerprint reads committed catalog rows (it waits
+  on DDL still open), and a read is saved with its fingerprint only when one taken after the read is the same; otherwise
+  it is saved with none, and the next build reads it whole.
+- **Unchanged.** A database whose fingerprint matches is held from its file as it was saved. Nothing else is read from
+  it, and its file is not written again, only marked used. One saved with definitions left out for memory is read whole
+  instead once there is room for them.
+- **Changed.** Otherwise the build lists the database's objects (each id, parent, last change and a checksum of its name,
+  schema, type and statistics) and compares them with the list saved beside the file. Only new and changed objects, a
+  changed child's parent, and their children and definitions are read again; dropped ones are dropped, and the rest keep
+  what the file held. The file is then saved in place. A database is read whole instead when the objects to read again
+  (the changed ones with their children) number more than 20,000, or more than 256 and more than a quarter of its objects; when its file left definitions out for memory; or when its
+  compatibility level is below 130 (the selective read needs `OPENJSON`). Table types are always read again whole.
+- **Failures are values.** A fingerprint, listing or selective read that fails, is denied or takes too long (15 seconds
+  for the fingerprint, a third of the database's read budget for the listing and selective read) reads the database whole as if nothing were saved; a file that does not open or does not load is
+  read whole too. Each is counted, and the build never fails for one.
+- **When.** At a connection's first build of a database, while the index holds nothing for it. A database already held
+  (read or loaded this session) is checked the same way, from the read held in memory, when DDL marks it or a search
+  finds it due ([Freshness](#freshness)). The server's own objects and SQL Server Agent's jobs are each one cheap read,
+  so they are always read from the server.
+- **What the fingerprint misses.** A grant or revoke of VIEW DEFINITION or of column permissions that shows or hides a
+  definition or column without changing which objects the login sees; a change to the `microsoft_database_tools_support`
+  extended property (which hides an object); a foreign key's referenced table, or a history table's current table, that
+  becomes visible to the login while the key's own table (or the history table) stays as it was; DDL that another session runs in a transaction while the
+  database is being read and rolls back before the read ends (the catalog is read uncommitted); and a change whose hashes collide (the fingerprint sums the first four bytes of each
+  row's SHA-256; a listing row's checksum is BINARY_CHECKSUM, a weak hash). Since a check uses the same fingerprint, each is
+  seen only when the database is read whole: Rebuild Search Index. Checked live on SQL Server 2025 only; the SQL is written
+  for 2016 and later.
+
+| Limit | Value |
+|---|---|
+| Disk space (past it, least recently used files go first) | 2,048 MiB by default, 64 to 262,144 MiB (`objectExplorer.search.diskLimitMiB`) |
+| Days an unused file is kept | 30 |
+| Age at which a leftover temporary file is deleted | 1 hour |
+| One file | 4 GiB |
+
+## Freshness
+
+An index is kept current while connected by checks, each of a unit (a database, the server's own objects, a dataset)
+and each far cheaper than reading it again. Nothing runs on a timer in the window: checks happen when the index is used,
+and BigQuery's background re-read is scheduled by the backend.
+
+- **DDL from Varia (SQL Server).** A query tab's script that may change objects (a word such as `CREATE`, `ALTER`,
+  `DROP`, `EXEC`, `GRANT`, `RENAME`, `COMMIT` or a system procedure, or `SELECT ... INTO` a table, outside strings,
+  quoted names and comments; a script over a million characters counts) marks the database it started in, and the one
+  it ended in, once it has run. Object actions and Table Designer mark their object's database; an action on a database
+  marks it and the server's own objects. A mark is free: nothing is read until the index is next used. A script that
+  only reads or writes rows marks nothing.
+- **Check on use.** A search that uses a unit last checked more than 15 minutes ago (SQL Server) or an hour ago
+  (BigQuery) marks it due. The search answers from what is held, and the window asks one check for each new mark (a
+  query's result, a search's status and a build's status name the newest), so marks set while no window searched are
+  checked at the next search, run or build.
+- **What a check does.** On SQL Server it lists the databases again (new ones since the last full build are read whole,
+  dropped ones leave) and verifies each marked or due database by its fingerprint: unchanged, the read is kept; changed,
+  only what changed is read again, as a reload does ([Reloading a SQL Server index](#reloading-a-sql-server-index)); a
+  read with no fingerprint (saved with none, or the saved index is off, so none was taken) is read whole. A marked
+  server reads its own objects and Agent's again. On BigQuery each due dataset is listed again (three free list calls)
+  and only objects new, created again or changed get their details read; a dataset DDL marked is read whole.
+- **Refresh.** On SQL Server, Object Explorer's Refresh checks its node's database whatever its age, and Refresh on the
+  server node checks the server, Agent and every database. Rebuild Search Index reads everything whole. BigQuery's
+  Refresh re-reads its project or dataset ([BigQuery](#bigquery)).
+- **Failures are values.** A fingerprint that fails, is denied or takes too long keeps the held read searchable and its
+  mark. That mark is not asked again at once: the database is checked at its next mark, Refresh, or the first search
+  15 minutes after the mark (or the failed check), which renumbers it so the window asks again. A database or dataset
+  found gone takes its marks with it. A full build stops a running check; a check never stops a full build. The window that runs a
+  build asks its checks after it; a check asked while a build runs answers at once, and what it was asked for is checked
+  by that build, or asked again 15 minutes on. DDL that lands while a check reads keeps its mark for the next check.
+- **Details read anyway (BigQuery).** An object's details read for Properties, Peek or the details pane replace what
+  the index holds of it when they differ (its columns, text, partitioning, clustering or signature; never only its
+  size), and its dataset is saved again.
+- **Background re-read (BigQuery).** After a connection's first full build, the backend gets each held object's details
+  again, the dataset whose details are oldest first, once they are 4 hours old: one call at a time, 2 seconds apart (at
+  most 1,800 an hour), each under the principal's rate limiter like any metadata call, at most 1,000 objects of a
+  dataset a pass (a larger dataset's passes go on from where the last stopped, and its details count as re-read once
+  they reach its end), giving up a pass after 3 failed calls in a row. It pauses while any build or check of the connection
+  runs, and stops when the connection closes. A dataset whose objects changed is held and saved again; an object gone
+  marks its dataset due.
+- **What is missed until a check.** DDL run outside Varia (another tool, a job, a deployment) is seen at the next due
+  search (one of every database, for the server's own objects and Agent's) or Refresh; DDL in a Varia script that names another database (`OtherDb.dbo.Object`) than the ones it started
+  and ended in likewise. On BigQuery an in-place change is seen at the next background pass over its dataset, or when its
+  details are read. What the fingerprint misses ([Reloading a SQL Server index](#reloading-a-sql-server-index)) is seen
+  only by Rebuild Search Index.
+- **Where it shows.** The index line, in the Search Objects tab and in Object Explorer's band, ends with how fresh the
+  index is: "saved 2 h ago" or "read 5 min ago" (the oldest unit; saved when it came from the saved index), then
+  "checked just now" (the unit checked longest ago), "checking", or "2 databases may have changed" (marked or due and not
+  yet checked; the server's own objects are checked with them but not counted), and "1 database not verified" (a SQL Server read with no fingerprint, while the saved index is on). The
+  line's tooltip gives the times on your clock. Ages are worked out when the line is drawn. The band keeps the line in
+  view while checking, while something may have changed and while something is not verified.
+
+| Limit | Value |
+|---|---|
+| SQL Server database checked on use after | 15 minutes |
+| BigQuery dataset checked on use after | 1 hour |
+| BigQuery details re-read after | 4 hours |
+| Background re-read pace | 1 call at a time, 2 s apart |
+| Objects a background pass gets | 1,000 a dataset |
+| Script length scanned for DDL | 1,000,000 characters |
 
 ## Searching
 
@@ -338,34 +640,44 @@ child's parent) show at once; reads start once the selection has rested 80 ms.
   details act on its own server.
 - **Summary.** Servers, total results, slowest server's time, and servers still searching or indexing, unsearchable or
   disconnected. The index line counts every server's index and names each that leaves objects out (skipped databases,
-  server objects or SQL Server Agent objects skipped, names only, no index, a failed build).
+  server objects or SQL Server Agent objects skipped, names only, definitions left out for memory, no index, a failed
+  build), with the [memory note](#memory) below it when any server's index ran short.
 
 ## BigQuery
 
 A BigQuery connection has an index of its own, searched in every way above (the box, the tab, the header's Search and All
-servers, which spans SQL Server and BigQuery connections together). It lives under the same 512 MiB budget and is built and
+servers, which spans SQL Server and BigQuery connections together). It lives under the same budget, of which it may use
+only a part so that SQL Server's definitions keep their room ([Memory](#memory)), and is built and
 dropped the same way, from BigQuery's free metadata calls only: no job runs and nothing is billed.
 
-- **Three prioritized waves.** Every build reads free REST metadata through the principal's shared limiter (16 calls in
-  flight per principal) so the billing project finishes first and interactive Object Explorer / Properties calls stay
-  responsive:
+- **Three prioritized waves.** Every build reads free REST metadata through the principal's shared limiter (each method
+  paced at BigQuery's per-user rate; docs/bigquery.md, Rate limiter), so the billing project finishes first and
+  interactive Object Explorer / Properties calls stay responsive:
   1. **Billing project (names + details).** Lists the billing project's datasets (`datasets.list`), then its objects
-     (`tables.list`, `routines.list`, `models.list`, four datasets at a time), then reads details (`tables.get` for
+     (`tables.list`, `routines.list`, `models.list`, 32 datasets at a time), then reads details (`tables.get` for
      columns, nested STRUCT fields by path such as `address.city`, descriptions, partitioning, clustering, rows, size and
-     view text, and `routines.get` for routine bodies and signatures, eight at a time; or the opt-in billed bulk path).
+     view text, and `routines.get` for routine bodies and signatures, 64 at a time; or the opt-in billed bulk path).
   2. **Starred and discovered projects (names).** When Options › Object Explorer › Commands › Index all accessible
      BigQuery projects (`objectExplorer.search.bigQueryAccessibleProjects`, on by default) is on, a full build calls
      `projects.list` (up to `objectExplorer.search.bigQueryMaxProjects`, default 500, configurable 1–5,000, sorted
      deterministically) and combines the user's starred projects with all
-     discovered accessible projects. It lists their datasets (four projects at a time) and objects (four datasets at a
+     discovered accessible projects. It lists their datasets (16 projects at a time) and objects (32 datasets at a
      time), swapping each dataset into the index immediately so every table, view, routine, model and dataset across all
      accessible projects becomes searchable within seconds.
-  3. **Starred, then discovered projects (details).** Reads `tables.get` and `routines.get` (eight at a time) for starred
-     projects first, then discovered projects, swapping each dataset as it finishes. If the shared 512 MiB memory budget
-     tightens on discovered projects, pass 2 stops early for remaining discovered projects (recording them as names only)
-     while keeping Wave 1 and Wave 2 intact.
+  3. **Starred, then discovered projects (details).** Reads `tables.get` and `routines.get` (64 at a time) for starred
+     projects first, then discovered projects, swapping each dataset as it finishes. Once less than half the memory
+     limit is free (discovered projects' floor, [Memory](#memory)), pass 2 stops early for the remaining discovered
+     projects (recording them as names only) while keeping Wave 1 and Wave 2 intact; the billing and starred projects'
+     details go on until 7/16 is free (3/8 for a dataset that already holds details), after which a dataset that holds
+     no details keeps its names without its columns and one that does keeps what it held.
   The status says "Discovering accessible BigQuery projects…", then "Indexing N of M datasets", then "Reading details of
-  N of M objects"; the finished index line reports the project count when more than one project is indexed.
+  N of M objects"; the finished index line reports the project count when more than one project is indexed. The status
+  bar names the pass the same way ("Listing BigQuery datasets N / M", "Reading BigQuery object details N / M"). While wave
+  2 is still listing projects, more datasets can join the total, so it reads "~M" (Search Objects says "about M"). While
+  BigQuery is refusing calls for its rate limit, the status bar adds "(rate limited)" and Search Objects adds a sentence
+  saying so. Refused calls wait and retry, so the build slows down. A call still has its own 30 s, so only a long throttle
+  turns into skipped datasets or missing details. Builds that count different things (SQL Server databases and BigQuery objects, say) are not added
+  together; the status bar then shows "Indexing objects on N servers…".
 - **Projects.** Starred projects (managed per verified BigQuery principal in Object Explorer) are always indexed with
   details — including public or dataset-ACL projects such as `bigquery-public-data` that `projects.list` does not return.
   Turning off `objectExplorer.search.bigQueryAccessibleProjects` limits indexing to the billing project and starred
@@ -403,13 +715,16 @@ dropped the same way, from BigQuery's free metadata calls only: no job runs and 
   with BigQuery's reason (`PERMISSION_DENIED`, `NOT_FOUND`, `TIMEOUT`, `QUOTA`, `API_DISABLED`, …). On auto-discovered
   projects, `API_DISABLED`, `PERMISSION_DENIED` and `NOT_FOUND` on `datasets.list` are silently ignored so non-BigQuery
   GCP projects do not pollute the skip list, while operational failures (`TIMEOUT`, `QUOTA`, `AUTH_EXPIRED`,
-  `CONNECTION_LOST`, `TOO_LARGE`) still report. A dataset whose objects' details could not all be read keeps their names
+  `CONNECTION_LOST`, `TOO_LARGE`) and a VPC Service Controls refusal (off the network: the project keeps what earlier
+  builds read) still report. A dataset whose objects' details could not all be read keeps their names
   and is counted as "details missing". Each metadata call has 30 s. A dataset dropped since its last read leaves the index
   without a skip.
 - **Limits** (`objectSearchLimits.bigQuery`, `BigQueryIndexLimits`): up to 500 discovered projects by default (configurable
-  1–5,000 via `objectExplorer.search.bigQueryMaxProjects`), 4 projects listed at
+  1–5,000 via `objectExplorer.search.bigQueryMaxProjects`), 16 projects and 32 datasets listed at once, 64 detail reads at
   once, 200 starred projects, 500 pages of 1,000 per listing, 10,000 columns per table, and 1,024 characters of each
-  column description or routine signature.
+  column description or routine signature. What a listing or a details pass has read stays outside the budget until its
+  dataset is held, so it is bounded too. Only 4 listings across all builds go past their first page at once. Pass 2 admits
+  datasets while the objects they read add up to at most 4,096; a larger dataset reads alone.
 
 ### Billed bulk index
 
@@ -471,9 +786,18 @@ Searching and hits:
 ## Protocol
 
 `explorer.index` (no deadline, cancellable, droppable `explorer.index.progress` EVENTs with `{ done, total, objects }`, and
-BigQuery's `phase` — `projects`, `names` or `details` —
+BigQuery's `phase` — `projects`, `names` or `details` — and, from a full build (`full`), `savedAt` while datasets loaded from
+the saved index are unchecked,
 relayed only to the requesting window, at most 4 a second) and `explorer.search` (15 s) run on the explorer lane and are
 cancelled with `explorerCancel` by `requestId`; docs/ipc.md has the details. Failures are values: an invalid pattern
 answers `problem`, and skipped databases are listed in the status. Both methods serve BigQuery connections too: `explorer.index`
-takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a project, or a project's dataset), `stale` and `bulk` (SQL Server refuses them), and
+takes BigQuery's `starredProjects`, `allProjects`, `maxProjects`, `scope` (a project, or a project's dataset) and `bulk` (SQL Server refuses them), `stale`
+(a check) on either engine, and on SQL Server with `stale` either `database` (a database to check whatever its age, at most
+128 UTF-16 units) or `checkAll` (every database and the server; BigQuery refuses both), and
 `explorer.search` its `project` and `dataset` (SQL Server's `database` is refused for BigQuery, and theirs for SQL Server).
+On either engine `explorer.index` takes `memoryLimitMiB` (64 to 16,384, checked in zod and in C#), the limit every
+connection's index shares from that build on; a status carries `leftOut` and `leftOutIn` when definitions were left out
+for memory, and a BigQuery status `savedAt` (UTC, to the second) while some of what it holds was loaded from the saved index and
+not yet checked. Every status carries its freshness: `readAt` (UTC, the oldest unit's read), `saved` (it came from the
+saved index), `checkedAt`, `checking`, `stale` (units marked or due) and `unverified`. The saved index has two methods of its own that only main sends, `explorer.indexStore.configure` and
+`explorer.indexStore.clear` ([ipc.md](ipc.md#methods)); its figures reach the window on `explorer.index.memory`.

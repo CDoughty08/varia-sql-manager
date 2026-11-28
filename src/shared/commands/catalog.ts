@@ -965,7 +965,7 @@ export const commandCatalog = {
   },
   'edit.refreshIntelliSense': {
     title: 'Refresh Local Cache', category: 'Edit', icon: 'refresh', keywords: ['intellisense', 'schema', 'metadata', 'cache'],
-    precondition: 'backendReady && !documentBusy', unavailableHint: 'Connect a SQL query to refresh its IntelliSense cache.',
+    precondition: 'backendReady && !documentBusy', unavailableHint: 'Connect a SQL query to refresh its IntelliSense cache.', providers: both,
     keybindings: [{ key: 'mod+shift+r', when: 'editorFocus && !inputFocus' }],
     menus: [{ menu: 'edit.intellisense', group: '2_cache', order: 1, mnemonic: 'r' }]
   },
@@ -1603,6 +1603,11 @@ export const commandCatalog = {
     precondition: 'hasConnection', unavailableHint: noServer
   },
   'explorer.stopIndexing': { providers: both, title: 'Stop Indexing', category: 'Object Explorer', icon: 'debug-stop', keywords: ['search', 'index', 'cancel'] },
+  // Deletes every file of the saved index (docs/object-search.md, Saved index): main sends the backend's clear itself.
+  'explorer.clearSavedIndexes': {
+    providers: both, title: 'Clear Saved Search Indexes', category: 'Object Explorer', icon: 'trash', keywords: ['search', 'index', 'saved', 'disk', 'cache', 'delete', 'remove'],
+    methods: ['explorer.indexStore.clear']
+  },
   // A Search Objects result's menu (search.hit.context) and keys. They act on the result the menu was opened for, else the
   // selected result of the list that has focus; the palette offers none of them, since it has no result to act on.
   'search.revealHit': {

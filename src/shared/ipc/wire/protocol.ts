@@ -107,7 +107,7 @@ export type CancelReason = typeof cancelReasons[keyof typeof cancelReasons]
 export const errorCodes = [
   // Backend, existing in v1.
   'INVALID_REQUEST', 'INVALID_PARAMS', 'METHOD_NOT_FOUND', 'BUSY', 'CANCELLED', 'SQL_ERROR', 'SMO_ERROR', 'BACKEND_ERROR',
-  'NOT_CONNECTED', 'NOT_FOUND', 'DUPLICATE_QUERY', 'SESSION_BUSY', 'SESSION_LOST', 'SESSION_CLOSED', 'SESSION_TARGET',
+  'NOT_CONNECTED', 'NOT_FOUND', 'NOT_READY', 'DUPLICATE_QUERY', 'SESSION_BUSY', 'SESSION_LOST', 'SESSION_CLOSED', 'SESSION_TARGET',
   'SESSION_LIMIT', 'AUTH_UNSUPPORTED', 'INVALID_SCRIPT',
   // Backend: integrated authentication on Linux and macOS without a usable Kerberos ticket (AUTH_UNSUPPORTED: no GSSAPI library).
   'AUTH_KERBEROS',

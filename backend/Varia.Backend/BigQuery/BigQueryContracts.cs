@@ -130,7 +130,7 @@ internal sealed record BigQueryJobSummary(string Project, string JobId, string? 
 /// or the text Execute is about to run) and the tab's default dataset; or, instead of text, Remote: a results.remoteQuery request
 /// whose query is estimated (docs/bigquery.md, Sort and filter in BigQuery). SessionId is the tab's (query.execute's sessionId):
 /// when the tab already has a BigQuery session the text is dry-run in it, so temp tables and variables resolve; none is created.</summary>
-internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null, string? SessionId = null);
+internal sealed record BigQueryDryRunArgs(string ConnectionId, string? Sql = null, string? Dataset = null, RemoteDryRunArgs? Remote = null, string? SessionId = null, bool NoDefaultDataset = false);
 
 /// <summary>A results.remoteQuery request (view, distinct, sample or rerun) to estimate, without its query ID; the answer says
 /// whether running it would fall back to the original query (BigQueryDryRunResult.Fallback).</summary>

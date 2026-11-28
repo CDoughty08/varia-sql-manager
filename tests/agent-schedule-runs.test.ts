@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { agentNextRun, formatRun, freeSlotCheck, freq, linkAnchor, nextRuns, noEndDate, scheduleRuns, subday, type AgentMoment, type AgentScheduleTiming } from '../src/shared/agent/schedule'
+import { agentNextRun, formatRun, freeSlotCheck, freeSlotText, freq, linkAnchor, nextRuns, noEndDate, scheduleRuns, subday, type AgentMoment, type AgentScheduleTiming } from '../src/shared/agent/schedule'
 
 // Every expectation in the first block is what a live SQL Server 2025 Agent computed (sysjobactivity.next_scheduled_run_date) for a scratch
 // job with that one schedule, created at the `now` shown (server time, Monday 2026-11-23). tests/agent-schedule-live.test.ts repeats the
@@ -159,5 +159,19 @@ describe('runs over a window', () => {
     const other = { name: 'Other', enabled: true, usualSeconds: 600, schedules: [{ ...fortnightly, nextRun: { date: 20261130, time: 30000 } }] }
     expect(freeSlotCheck(fortnightly, tuesday, 600, [other], 3, { date: 20261207, time: 30000 }).clashes).toEqual([])
     expect(freeSlotCheck(fortnightly, tuesday, 600, [{ ...other, schedules: [{ ...fortnightly, nextRun: { date: 20261207, time: 30000 } }] }], 3, { date: 20261207, time: 30000 }).clashes).toHaveLength(3)
+  })
+  it('lists all 5 runs for sparse recurrences (e.g. every 48 months) and reports the chronologically earliest clash', () => {
+    const quadrennial = timing({ freqType: freq.monthly, freqInterval: 1, freqRecurrenceFactor: 48, activeStartDate: 20261201, activeStartTime: 20000 })
+    expect(nextRuns(quadrennial, { date: 20261122, time: 0 }, 5).map(formatRun)).toEqual([
+      'Tue 2026-12-01 02:00', 'Sun 2030-12-01 02:00', 'Fri 2034-12-01 02:00', 'Wed 2038-12-01 02:00', 'Mon 2042-12-01 02:00'
+    ])
+    // Friday job listed before Thursday job: freeSlotCheck orders clashes chronologically so Thursday is reported first.
+    const daily = timing({ freqType: freq.daily, freqInterval: 1, activeStartDate: 20261122, activeStartTime: 30000 })
+    const friday = { name: 'Friday Job', enabled: true, usualSeconds: 600, schedules: [timing({ freqType: freq.weekly, freqInterval: 32, freqRecurrenceFactor: 1, activeStartDate: 20261122, activeStartTime: 30000 })] }
+    const thursday = { name: 'Thursday Job', enabled: true, usualSeconds: 600, schedules: [timing({ freqType: freq.weekly, freqInterval: 16, freqRecurrenceFactor: 1, activeStartDate: 20261122, activeStartTime: 30000 })] }
+    const check = freeSlotCheck(daily, { date: 20261125, time: 0 }, 600, [friday, thursday], 5)
+    expect(check.clashes[0]).toMatchObject({ job: 'Thursday Job', at: { date: 20261126, time: 30000 } })
+    expect(freeSlotText(check)).toContain('Thursday Job and 1 other job also run')
+    expect(freeSlotText(check)).toContain('first at Thu 2026-11-26 03:00')
   })
 })

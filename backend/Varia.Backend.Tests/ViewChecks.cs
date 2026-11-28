@@ -513,6 +513,29 @@ internal static class ViewChecks
         check(Show(Order(set, (5, false, SortMode.Value))) == "4,1,2,0,3",
             "a case-insensitive collation sorts A and 'a  ' together (trailing spaces ignored) in row order, then b and B");
         check(Show(Order(set, (6, false, SortMode.Value))) == "4,1,3,2,0", "a _BIN2 collation sorts by code point: capitals first");
+        // SQL_Latin1_General_CP1_CI_AS (SortId 52): varchar uses string sort (a-c < ab), nvarchar uses word sort (ab < a-c);
+        // legacy Unicode _BIN compares trailing UTF-16 code units byte-by-byte in little-endian order, reversing a\u0100 vs a\u0001 against _BIN2.
+        var sqlCiAs = new ResultCollation(1033, 52, 1252, false, 1);
+        var legacyBin = new ResultCollation(1033, 0, 1252, false, 32768);
+        var bin2 = new ResultCollation(1033, 0, 1252, false, 16384);
+        string TextOrder(string dataType, ResultCollation collation, params string[] values)
+        {
+            var textSet = store.Open(store.BeginQuery("text-" + dataType + Guid.NewGuid()), 0, 1, 1, "rows", [new ResultColumn("v", dataType, "text", Collation: collation)], [WireKind.Text])
+                ?? throw new InvalidOperationException("The result set was not kept.");
+            foreach (var value in values)
+            {
+                textSet.CountRow();
+                textSet.BeginRow()!.AppendText(value);
+                textSet.TryCommitRow();
+            }
+            textSet.Complete();
+            return Show(Order(textSet, (0, false, SortMode.Value)));
+        }
+        check(TextOrder("varchar(20)", sqlCiAs, "a-c", "ab") == "0,1"
+            && TextOrder("nvarchar(20)", sqlCiAs, "a-c", "ab") == "1,0"
+            && TextOrder("nvarchar(20)", legacyBin, "a\u0100", "a\u0001") == "0,1"
+            && TextOrder("nvarchar(20)", bin2, "a\u0100", "a\u0001") == "1,0",
+            "SQL_Latin1_General_CP1_CI_AS sorts varchar (a-c, ab) and nvarchar (ab, a-c) as SQL Server does, and legacy Unicode _BIN differs from _BIN2");
         check(Show(Order(set, (7, false, SortMode.Value))) == "2,3,1,4,0", "varbinary sorts byte by byte, a prefix first");
         check(Show(Order(set, (8, false, SortMode.Chars))) == "2,3,1,0,4" && Show(Order(set, (8, false, SortMode.Bytes))) == "2,3,1,0,4"
             && Show(Order(set, (8, false, SortMode.Value))) == "2,0,1,3,4",

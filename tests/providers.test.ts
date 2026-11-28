@@ -85,7 +85,7 @@ describe('BigQuery connection options', () => {
     expect(connectionOptionsSchema.safeParse({ ...sqlServer, provider: 'bigquery' }).success).toBe(false)
   })
   it('keys and bindings name the provider, so a BigQuery entry never matches a SQL Server one, and SQL Server\'s are unchanged', () => {
-    expect(JSON.parse(connectionKey(sqlServer)).slice(0, 7)).toEqual(['sql-prod-01', 'sales', 'windows', '', 'mandatory', false, ''])
+    expect(JSON.parse(connectionKey(sqlServer)).slice(0, 7)).toEqual(['sql-prod-01', 'Sales', 'windows', '', 'mandatory', false, ''])
     expect(connectionKey({ ...sqlServer, provider: 'sqlserver' })).toBe(connectionKey(sqlServer))
     expect(JSON.parse(connectionKey(bigQuery))[0]).toBe('bigquery')
     expect(connectionKey({ ...bigQuery, dataset: 'sales' })).not.toBe(connectionKey(bigQuery))

@@ -90,23 +90,36 @@ export function localPage(table: LocalTableData, order?: readonly number[], firs
   const wanted = selected && selected.length < table.columns.length ? new Set(selected) : undefined
   const columns = table.columns.map((_, column) => {
     if (wanted && !wanted.has(column)) return empty ??= { wire: 'text', validity: new Uint8Array(Math.ceil(count / 8)), offsets: new Uint32Array(count + 1), data: new Uint8Array(), truncated: undefined, errors: undefined }
-    const parts: Uint8Array[] = [], offsets = new Uint32Array(count + 1), validity = new Uint8Array(Math.ceil(count / 8))
+    const offsets = new Uint32Array(count + 1), validity = new Uint8Array(Math.ceil(count / 8))
+    let data = new Uint8Array(Math.max(64, count * 16))
     let at = 0
     for (let index = 0; index < count; index++) {
       const value = table.rows[order ? order[first + index] : first + index][column] ?? null
       if (value !== null) {
         validity[index >>> 3] |= 1 << (index & 7)
-        const data = encoder.encode(value)
-        parts.push(data)
-        at += data.length
+        if (value.length > 0) {
+          if (at + value.length > data.length) {
+            const grown = new Uint8Array(Math.max(data.length * 2, at + value.length))
+            grown.set(data.subarray(0, at))
+            data = grown
+          }
+          const firstPass = encoder.encodeInto(value, data.subarray(at))
+          at += firstPass.written
+          if (firstPass.read < value.length) {
+            const rest = value.slice(firstPass.read)
+            // UTF-8 takes at most 3 bytes per UTF-16 code unit, so one growth always fits the remainder.
+            const grown = new Uint8Array(Math.max(data.length * 2, at + rest.length * 3))
+            grown.set(data.subarray(0, at))
+            data = grown
+            at += encoder.encodeInto(rest, data.subarray(at)).written
+          }
+        }
       }
       offsets[index + 1] = at
     }
-    const data = new Uint8Array(at)
-    let offset = 0
-    for (const part of parts) { data.set(part, offset); offset += part.length }
+    const finalData = at === data.length ? data : data.subarray(0, at)
     byteLength += at
-    return { wire: 'text' as const, validity, offsets, data, truncated: undefined, errors: undefined }
+    return { wire: 'text' as const, validity, offsets, data: finalData, truncated: undefined, errors: undefined }
   })
   return { resultId: 0, firstRow: first, rowCount: count, columns, byteLength }
 }

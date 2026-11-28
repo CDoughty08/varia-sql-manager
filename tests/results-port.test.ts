@@ -374,6 +374,20 @@ describe('ResultsPortHost', () => {
     expect(port().posted).toEqual([{ t: 'backend', generation: 2, status: 'starting' }])
   })
 
+  it('carries the saved index’s figures with the index’s sample, to an open port and to one opened later', () => {
+    const { host, frame, port } = fixture()
+    const store = { mode: 'encrypted', files: 12, bytes: 3 * 1048576, limitBytes: 2048 * 1048576 } as const
+    host.memory('index', { usedBytes: 70, globalBytes: 100, generation: 1, seq: 1, store })
+    expect(port().posted.at(-1)).toEqual({ t: 'memory', feature: 'index', usedBytes: 70, globalBytes: 100, generation: 1, seq: 1, store })
+    // A sample from before main configured the store has none, and the earlier one is not carried over to it.
+    host.memory('index', { usedBytes: 80, globalBytes: 100, generation: 1, seq: 2 })
+    expect(port().posted.at(-1)).toEqual({ t: 'memory', feature: 'index', usedBytes: 80, globalBytes: 100, generation: 1, seq: 2 })
+    host.memory('index', { usedBytes: 80, globalBytes: 100, generation: 1, seq: 3, store: { ...store, mode: 'noKeyStore', files: 0, bytes: 0 } })
+    host.close()
+    host.open(frame)
+    expect(port().posted.at(-1)).toEqual({ t: 'memory', feature: 'index', usedBytes: 80, globalBytes: 100, generation: 1, seq: 3, store: { ...store, mode: 'noKeyStore', files: 0, bytes: 0 } })
+  })
+
   it('does not own a closed result again when a load summary names it released', async () => {
     const { host, backend, port, reads } = fixture()
     host.own([descriptor(7)])

@@ -55,11 +55,19 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public int Modules { get; } = modules;
     /// <summary>Definitions cut at the per-module limit, or left out once the budget was spent.</summary>
     public int Cut { get; } = cut;
+    /// <summary>The part of <see cref="Cut"/> left out whole because the index's memory ran out (the names' reserve, or
+    /// BigQuery's floor), which the status reports apart: a search inside definitions cannot find these.</summary>
+    public int LeftOut { get; init; }
     /// <summary>Read without its children (CHILDREN_LEFT_OUT) because with them it did not fit: set before it is held, and kept
     /// with it however later builds end, for the Memory panel's Nerd metrics.</summary>
     public bool ChildrenLeftOut { get; set; }
     /// <summary>Read by a build without definitions: no entry has one.</summary>
     public bool DefinitionsLeftOut { get; set; }
+    /// <summary>BigQuery: the read holds some object's details (its columns): what a later read of the dataset keeps hold of.</summary>
+    public bool Detailed { get; init; }
+    /// <summary>BigQuery: the part of <see cref="Bytes"/> its names hold (records, facts, text slots). A read that replaces this
+    /// one charges its names to that part and its details to the rest, so neither pushes the other out of the share.</summary>
+    public long NameBytes { get; init; }
     /// <summary>Whether the database's object names tell case apart (<see cref="ObjectSearchSql.CaseSensitive"/>); null where the
     /// read did not reach it (a batch that failed part way).</summary>
     public bool? CaseSensitive { get; set; }
@@ -75,6 +83,20 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
     public bool FailedPart { get; set; }
     /// <summary>When the read finished (UTC): how stale the editor's metadata may be.</summary>
     public DateTime ReadAt { get; } = readAt ?? DateTime.UtcNow;
+    /// <summary>Loaded from the saved index rather than read from its source (the status says the index was saved, not read).</summary>
+    public bool Loaded { get; init; }
+    /// <summary>What the store keeps in the read's file beside the unit (<see cref="IndexStore"/>), set by its builder before
+    /// the read is held: Sync in the header, which a listing of saved units reads without the body (what the builder will
+    /// compare with the source to tell how stale the file is), and Extra in the body. Both are the builder's own bytes.</summary>
+    public ReadOnlyMemory<byte> Sync { get; set; }
+    public ReadOnlyMemory<byte> Extra { get; set; }
+    /// <summary>Whether holding the read queues its save. False (set before it is held) for a read its builder knows no file
+    /// may stand for, and for one the store loaded, whose file it already is.</summary>
+    public bool SaveWhenHeld { get; set; } = true;
+    /// <summary>A BigQuery dataset's: the store's stale count as its read began (<see cref="IndexStore.StaleSeq"/>). DDL that
+    /// marks the dataset stale after it, from any connection of the principal, keeps the read from being saved. MaxValue: not
+    /// checked.</summary>
+    public long StaleSeen { get; set; } = long.MaxValue;
 
     /// <summary>What its lookup arrays (<see cref="TableLookup"/>) hold of the budget: 0 until the first lookup builds them.</summary>
     public long LookupBytes { get { lock (gate) return lookupBytes; } }
@@ -90,8 +112,8 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
 
     /// <summary>The lookup arrays, built on the first lookup and charged to <paramref name="budget"/> until the database is dropped;
     /// <paramref name="built"/> is told when this call built them. Null once it is dropped, while another call is building them, or
-    /// when the budget cannot take them: the lookup then scans the table.</summary>
-    public TableLookup? Lookup(IndexBudget budget, Action? built = null)
+    /// when the budget cannot take them and leave <paramref name="keepFree"/> free (BigQuery's floor): the lookup then scans the table.</summary>
+    public TableLookup? Lookup(IndexBudget budget, Action? built = null, long keepFree = 0)
     {
         if (Volatile.Read(ref lookup) is { } held) return held;
         var bytes = TableLookup.BytesFor(Table);
@@ -100,7 +122,7 @@ internal sealed class DatabaseIndex(string database, ObjectTable table, long byt
         lock (gate)
         {
             if (lookup is not null || dropped || lookupBuilding) return lookup;
-            if (!budget.TryTake(bytes)) return null;
+            if (!budget.TryTake(bytes, keepFree)) return null;
             lookupBuilding = true;
         }
         TableLookup made;
@@ -172,12 +194,36 @@ internal static class IndexMemory
 /// <summary>Bounds on the index and its searches (objectSearchLimits in src/shared/explorer/search.ts).</summary>
 internal sealed class ObjectIndexLimits
 {
+    /// <summary>The memory limit in MiB as Options sets it (objectExplorer.search.memoryLimitMiB): its default and bounds.</summary>
+    public const int DefaultMemoryMiB = 512;
+    public const int MinMemoryMiB = 64;
+    public const int MaxMemoryMiB = 16_384;
+    /// <summary>The names' reserve is one part in this many of the limit.</summary>
+    public const int NamesReserveShare = 4;
+
     /// <summary>The memory every connection's index holds together (<see cref="IndexMemory"/>): a database that would pass it is
-    /// read again without its children (CHILDREN_LEFT_OUT), and one that still would is skipped as TOO_LARGE.</summary>
-    public long MemoryBytes { get; init; } = 512L * 1024 * 1024;
+    /// read again without its children (CHILDREN_LEFT_OUT), and one that still would is skipped as TOO_LARGE. A build may
+    /// change it (<see cref="ObjectSearchService.SetMemoryLimit"/>).</summary>
+    public long MemoryBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024;
     /// <summary>The part of <see cref="MemoryBytes"/> definitions leave to names: a definition is left out (counted as cut) once
     /// less than this is free.</summary>
-    public long NamesReserveBytes { get; init; } = 128L * 1024 * 1024;
+    public long NamesReserveBytes { get; set; } = DefaultMemoryMiB * 1024L * 1024 / NamesReserveShare;
+    // What a BigQuery read keeps free, so that however much BigQuery metadata is indexed, and whichever connection was built
+    // first, a SQL Server read still finds room above the names' reserve for its definitions. Each floor is the names' reserve
+    // and a part more, so BigQuery gives way in order: discovered projects' details first, then the billing and starred
+    // projects', then names. A floor only refuses BigQuery; SQL Server's reads never see it.
+    /// <summary>Kept free by everything a BigQuery index holds (names, records, lookup arrays): 3/8 of the limit.</summary>
+    public long BigQueryNamesFloorBytes => NamesReserveBytes + NamesReserveBytes / 2;
+    /// <summary>Kept free by the billing and starred projects' details (columns, view and routine text): 7/16 of the limit.</summary>
+    public long BigQueryDetailsFloorBytes => NamesReserveBytes + NamesReserveBytes / 4 * 3;
+    /// <summary>Kept free by discovered projects' details, the first to give way: half the limit.</summary>
+    public long BigQueryDiscoveredFloorBytes => NamesReserveBytes * 2;
+
+    /// <summary>The floor a BigQuery dataset's details keep free: its project's, or one step lower for a dataset that already
+    /// <paramref name="holds"/> details, so what it holds can grow a little (a column added, a table recreated a little wider)
+    /// without the dataset losing its columns at the very line the build stopped at.</summary>
+    public long BigQueryDetailsFloor(bool discovered, bool holds) =>
+        discovered ? holds ? BigQueryDetailsFloorBytes : BigQueryDiscoveredFloorBytes : holds ? BigQueryNamesFloorBytes : BigQueryDetailsFloorBytes;
     /// <summary>The longest part of one definition the index keeps.</summary>
     public int DefinitionChars { get; init; } = 1_000_000;
     /// <summary>Databases indexed at once across every connection, and per connection.</summary>
@@ -196,12 +242,56 @@ internal sealed class ObjectIndexLimits
     public int PreviewChars { get; init; } = 160;
 }
 
+/// <summary>Bounds on one saved unit of the index (<see cref="IndexFile"/>). A file is untrusted input: the loader checks every
+/// length and count against these, and the writer refuses a unit past them rather than write a file no reader takes. What a
+/// load keeps it charges to the index's budget first, as a read does; these bound the little it does not charge (the shapes,
+/// the caller's bytes, one text at a time, a bit or two for each entry a load without children reads past).</summary>
+internal static class IndexFileLimits
+{
+    /// <summary>One file, header and body.</summary>
+    public const long FileBytes = 4L << 30;
+    /// <summary>Entries in one unit's table, and in the shared resource set's (which is charged whatever the budget holds).</summary>
+    public const int Objects = 1 << 25;
+    public const int ResourceObjects = 1 << 21;
+    /// <summary>Distinct texts in one unit's table.</summary>
+    public const int Texts = 1 << 26;
+    /// <summary>One text in UTF-16 code units: the longest definition the index keeps by default (<see cref="ObjectIndexLimits.DefinitionChars"/>),
+    /// rounded up.</summary>
+    public const int TextChars = 1 << 20;
+    /// <summary>A text an entry or a type is named by. Search builds a label of an object's names for every candidate, so a
+    /// name is held to what the sources give: the longest is a BigQuery field path, 15 names of 300 characters.</summary>
+    public const int NameTextChars = 5000;
+    /// <summary>Dates outside what an entry's 32 bits hold (before 1970): kept beside the table, uncharged, so few.</summary>
+    public const int Dates = 1 << 16;
+    /// <summary>The kind, folder and subtype combinations one unit names (the process knows a few hundred), and each one's length.</summary>
+    public const int Shapes = 4096;
+    public const int ShapeChars = 64;
+    /// <summary>A unit's types (<see cref="ObjectDetails"/> numbers them in 16 bits) and the columns its indexes and keys list.</summary>
+    public const int Types = ushort.MaxValue + 1;
+    public const int KeyColumns = 1 << 27;
+    /// <summary>The columns of one index or key (SQL Server's most is 32 key columns and 1,023 included ones).</summary>
+    public const int KeyColumnsPerKey = 4096;
+    /// <summary>A database's, project's or dataset's name, or a server's version.</summary>
+    public const int NameChars = 1024;
+    /// <summary>A BigQuery fact's text (a signature, a description, a shard group's prefix), as a read clips it.</summary>
+    public const int FactChars = BigQueryIndexLimits.FactChars;
+    /// <summary>The caller's identity and sync state in the header, and the opaque bytes it may keep in the body.</summary>
+    public const int IdentityBytes = 1024;
+    public const int SyncBytes = 1 << 20;
+    public const int ExtraBytes = 32 << 20;
+}
+
 /// <summary>The memory held by every connection's index (<see cref="IndexMemory"/>), in bytes.</summary>
 internal sealed class IndexBudget(long limit)
 {
     private long used;
-    public long Limit => limit;
+    private long cap = limit;
+    /// <summary>A limit set below what is held drops nothing: it only refuses what is asked from then on, until enough has
+    /// been given back.</summary>
+    public long Limit { get => Interlocked.Read(ref cap); set => Interlocked.Exchange(ref cap, value); }
     public long Used => Interlocked.Read(ref used);
+    /// <summary>What is left of the limit; negative while a lowered limit is below what is held.</summary>
+    public long Free => Limit - Used;
 
     /// <summary>Takes <paramref name="bytes"/> when that leaves at least <paramref name="keepFree"/> of the limit free.</summary>
     public bool TryTake(long bytes, long keepFree = 0)
@@ -209,7 +299,7 @@ internal sealed class IndexBudget(long limit)
         while (true)
         {
             var current = Interlocked.Read(ref used);
-            if (current + bytes > limit - keepFree) return false;
+            if (current + bytes > Limit - keepFree) return false;
             if (Interlocked.CompareExchange(ref used, current + bytes, current) == current) return true;
         }
     }
@@ -232,6 +322,10 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
     private DatabaseIndex? server;
     private DatabaseIndex? agent;
     public bool Disposed { get; private set; }
+    /// <summary>Told of every read this index holds and of every unit it drops as gone (<see cref="IndexStoreSink"/>), under the
+    /// index's gate so the store hears of a unit's reads in the order they were held; null while nothing is saved for the
+    /// connection (no store, or no server and account established for it).</summary>
+    public IndexStoreSink? Sink { get; set; }
 
     public IReadOnlyCollection<DatabaseIndex> Databases { get { lock (gate) return [.. databases.Values]; } }
     public ResourceSet? Resource { get { lock (gate) return resource; } }
@@ -264,6 +358,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
             Settle(agent, value);
             agent = value;
+            Sink?.Held(IndexUnitKind.Agent, value);
         }
     }
 
@@ -275,6 +370,7 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             if (Disposed) { Drop(value, value.Bytes - value.Credited); return; }
             Settle(server, value);
             server = value;
+            Sink?.Held(IndexUnitKind.Server, value);
         }
     }
 
@@ -293,6 +389,8 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
 
     private void Drop(DatabaseIndex value, long bytes)
     {
+        // A save still queued for it would keep alive memory the budget no longer counts.
+        Sink?.Released(value);
         value.Credit();
         budget.Release(bytes);
         value.Dropped(budget);
@@ -308,8 +406,25 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             // A disconnected index keeps nothing, and the same set put again gives back its second reference.
             if (Disposed || ReferenceEquals(resource, value)) drop = value;
             else { drop = resource; resource = value; }
+            // The set held again counts as used: the store saves it once and marks its file after that.
+            if (!Disposed && value is not null) Sink?.HeldResource(value);
         }
         if (drop is not null) resources?.Release(drop);
+    }
+
+    /// <summary>Tells the sink again of everything held (the store has just started saving: <see cref="IndexStore.Opened"/>),
+    /// but for the reads <paramref name="current"/> refuses (a BigQuery dataset DDL has marked stale since it was read).</summary>
+    public void Announce(Func<DatabaseIndex, bool> current)
+    {
+        lock (gate)
+        {
+            if (Disposed || Sink is not { } sink) return;
+            foreach (var value in databases.Values)
+                if (current(value)) sink.Held(value);
+            if (server is not null) sink.Held(IndexUnitKind.Server, server);
+            if (agent is not null) sink.Held(IndexUnitKind.Agent, agent);
+            if (resource is not null) sink.HeldResource(resource);
+        }
     }
 
     /// <summary>Releases a freshly built read that was never placed in the index (e.g. superseded build), returning only the net bytes it took.</summary>
@@ -323,15 +438,22 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
             databases.Remove(value.Key, out var old);
             Settle(old, value);
             databases[value.Key] = value;
+            Sink?.Held(value);
         }
     }
 
-    /// <summary>Drops the reads <paramref name="keep"/> refuses (a BigQuery listing's datasets and projects that are gone).</summary>
-    public void KeepWhere(Func<DatabaseIndex, bool> keep)
+    /// <summary>Drops the reads <paramref name="keep"/> refuses. <paramref name="gone"/> when the source no longer has them (a
+    /// listing's datasets that are gone), so what was saved of them goes too; not when they only left what this connection
+    /// indexes (a project no longer starred), which another connection of the principal may still use.</summary>
+    public void KeepWhere(Func<DatabaseIndex, bool> keep, bool gone)
     {
         lock (gate)
             foreach (var (key, value) in databases.Where(pair => !keep(pair.Value)).ToList())
-                if (databases.Remove(key, out var old)) Drop(old, old.Bytes);
+                if (databases.Remove(key, out var old))
+                {
+                    Drop(old, old.Bytes);
+                    if (gone) Sink?.Gone(old);
+                }
     }
 
     /// <summary>The read held under <paramref name="key"/> (<see cref="DatabaseIndex.Key"/>), or null.</summary>
@@ -340,12 +462,16 @@ internal sealed class ConnectionIndex(IndexBudget budget, ResourceCatalog? resou
         lock (gate) return databases.GetValueOrDefault(key);
     }
 
-    /// <summary>Drops the databases a new listing no longer names.</summary>
+    /// <summary>Drops the databases a new listing no longer names, and what was saved of them.</summary>
     public void Keep(IReadOnlySet<string> names)
     {
         lock (gate)
             foreach (var name in databases.Keys.Where(name => !names.Contains(name)).ToList())
-                if (databases.Remove(name, out var old)) Drop(old, old.Bytes);
+                if (databases.Remove(name, out var old))
+                {
+                    Drop(old, old.Bytes);
+                    Sink?.Gone(old);
+                }
     }
 
     public void Dispose()
@@ -402,6 +528,11 @@ internal sealed class SearchMatcher
         if (!regex)
         {
             var literal = wholeWord ? text : text.Trim('*');
+            if (!wholeWord && literal.Length == 0 && text.Length > 0)
+            {
+                // All-star wildcard (*, **): matches any non-empty name or line, matching Whole Word's * behaviour.
+                return (new SearchMatcher(text, caseSensitive, false, new Regex(".+", options, timeout), true), null);
+            }
             if (literal.IndexOfAny(['*', '?']) < 0) return (new SearchMatcher(literal, caseSensitive, wholeWord, null, true), null);
             var pattern = Wildcard(literal);
             if (wholeWord)
@@ -550,7 +681,7 @@ internal sealed class SearchMatcher
                 (index, length) = (start + at, text.Length);
             }
             if (!wholeWord || Bounded(value, index, length)) return true;
-            start = index + Math.Max(1, length);
+            start = index + 1;
         }
         (index, length) = (-1, 0);
         return false;

@@ -112,20 +112,21 @@ internal static class AgentChecks
                 "agent.profile whose msdb refuses the login after the connection opened (916) runs the server-scope batch at server scope next, and with that failing too answers a profile with msdb access off and no role: "
                 + result.Error?.Code + " " + result.Error?.Message + " scopes " + string.Join(",", scopes.Select(scope => scope.Database ?? "server")));
         }
-        // The server-scope read gets what is left of the one budget, never a fresh one: msdb's 916 takes 1 s of a 3 s budget, so the
-        // server-scope read is cancelled under 3.5 s after msdb's started (a reset budget: 4 s or more), and the 916's no-role
-        // profile stands. The times are taken inside the fake statements, so the call's own overhead does not count.
+        // The server-scope read gets what is left of the one budget, never a fresh one: msdb's 916 takes 2 s of a 4.5 s budget, so
+        // the server-scope read is cancelled about 4.5 s after msdb's started, and a reset budget could not cancel it before 6.5 s.
+        // The bound sits just under that, leaving loaded CI runners 1.7 s of scheduling delay; msdb's read keeps 2.5 s of the budget
+        // spare so it always answers its 916. The times are taken inside the fake statements, so the call's own overhead does not count.
         var budgetWatch = System.Diagnostics.Stopwatch.StartNew();
         long msdbAt = -1, cancelledAt = -1;
         using (var service = new ExplorerService(refusing, new ExplorerOptions
         {
-            AgentProfileBudget = TimeSpan.FromSeconds(3),
+            AgentProfileBudget = TimeSpan.FromMilliseconds(4500),
             TestStatementFailure = async (database, _, token) =>
             {
                 if (database == "msdb")
                 {
                     msdbAt = budgetWatch.ElapsedMilliseconds;
-                    await Task.Delay(TimeSpan.FromSeconds(1), token);
+                    await Task.Delay(TimeSpan.FromSeconds(2), token);
                     return NoMsdb();
                 }
                 try { await Task.Delay(TimeSpan.FromSeconds(10), token); }
@@ -135,9 +136,9 @@ internal static class AgentChecks
         }))
         {
             var result = await service.AgentProfileAsync(Args(), CancellationToken.None);
-            check(result is { Error: null, Profile.MsdbAccess: false } && msdbAt >= 0 && cancelledAt - msdbAt is > 1000 and < 3500 && service.RunningCount == 0,
+            check(result is { Error: null, Profile.MsdbAccess: false } && msdbAt >= 0 && cancelledAt - msdbAt is > 2000 and < 6200 && service.RunningCount == 0,
                 "agent.profile whose server-scope read outlasts what is left of the one budget answers the no-role profile, not a TIMEOUT, without restarting the budget: "
-                + result.Error?.Code + ", cancelled " + (cancelledAt - msdbAt) + " ms after msdb's read started");
+                + result.Error?.Code + ", msdb's read started at " + msdbAt + " ms, the server-scope read cancelled at " + cancelledAt + " ms");
         }
         // A disconnect during the server-scope read cancels the request (CANCELLED), never a profile for a connection that is gone.
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -160,6 +161,29 @@ internal static class AgentChecks
             try { await call; } catch (RequestException error) { code = error.Code; }
             check(code == "CANCELLED" && service.RunningCount == 0,
                 "agent.profile whose connection is disconnected during the server-scope read is CANCELLED, not a no-role profile: " + (code ?? "answered"));
+        }
+        // SqlClient's TdsParserStateObject.ExecuteFlush can throw InvalidOperationException ("Operation cancelled by user.")
+        // when a disconnect cancels ExecuteReaderAsync mid-flush on Windows LPC; RunAsync maps it to cancellation.
+        var flushReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (var service = new ExplorerService(refusing, new ExplorerOptions
+        {
+            TestStatementFailure = async (_, _, token) =>
+            {
+                flushReached.TrySetResult();
+                try { await Task.Delay(TimeSpan.FromSeconds(10), token); }
+                catch (OperationCanceledException) { throw new InvalidOperationException("Operation cancelled by user."); }
+                return NoMsdb();
+            }
+        }))
+        {
+            var args = Args();
+            var call = service.AgentProfileAsync(args, CancellationToken.None);
+            await flushReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            service.Forget(args.ConnectionId);
+            string? code = null;
+            try { await call; } catch (RequestException error) { code = error.Code; }
+            check(code == "CANCELLED" && service.RunningCount == 0,
+                "agent.profile maps SqlClient's cancelled InvalidOperationException on disconnect to CANCELLED: " + (code ?? "answered"));
         }
         // A server-scope read whose connection the server refuses to open (18456) is that error, not "no role".
         var opens = 0;

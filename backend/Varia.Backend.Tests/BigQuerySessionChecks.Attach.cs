@@ -676,6 +676,18 @@ internal static partial class BigQuerySessionChecks
         check(foreign.Result is QueryResult { Error.Code: "AUTH_IDENTITY" } && missing.Result is QueryResult { Error.Code: "AUTH_IDENTITY" } && project.Code == "AUTH_IDENTITY" && invalid.Code == "INVALID_PARAMS" && !bq.Cancels.Contains(foreignJob),
             $"the identity check refuses another principal's, a missing and another project's job: {foreign.Code} {missing.Code} {project.Code} {invalid.Code}");
 
+        // A VPC Service Controls refusal of jobs.get says nothing about whose job it is: PERMISSION_DENIED, which keeps the job
+        // for the next connection, never AUTH_IDENTITY, which lets go of it.
+        var perimeterTab = Tab();
+        await harness.Execute(perimeterTab, "SELECT 1");
+        var perimeterJob = JobOf(bq.UserInserts.Last());
+        harness.Fake.On("GET", Base + "/jobs/" + System.Text.RegularExpressions.Regex.Escape(perimeterJob), BigQueryFake.Fixture("error-vpc-service-controls", 403));
+        var blocked = await harness.Call("query.attach", AttachArgs(harness, Tab(), perimeterJob));
+        var blockedError = (blocked.Result as QueryResult)?.Error;
+        var (blockedCode, blockedText) = blockedError is { } value ? (value.Code, value.Message) : (blocked.Code, blocked.Message);
+        check(blockedCode == "PERMISSION_DENIED" && blockedText.StartsWith(BigQueryErrors.PerimeterOpening, StringComparison.Ordinal) && !bq.Cancels.Contains(perimeterJob),
+            $"a re-attach VPC Service Controls refuses is PERMISSION_DENIED naming the perimeter, not another principal's job: {blockedCode} {blockedText}");
+
         // Results gone: REMOTE_EXPIRED.
         var expiredTab = Tab();
         await harness.Execute(expiredTab, "SELECT 1");

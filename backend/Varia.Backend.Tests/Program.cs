@@ -27,6 +27,12 @@ if (args is [SearchBench.Argument])
     return;
 }
 // tests/bench/search.bench.ts: measures only, no checks.
+if (args is [IndexFileBench.Argument])
+{
+    IndexFileBench.Run();
+    return;
+}
+// tests/bench/search.bench.ts: measures only, no checks.
 if (args is [FindBench.MessagesArgument, var messagesServer, ..])
 {
     FindBench.RunMessages(messagesServer, args.Length > 2 ? args[2] : null);
@@ -123,6 +129,7 @@ if (args is ["--bigquery-checks"])
     await BigQueryIndexChecks.RunAsync(Collect);
     await BigQueryJobHistoryChecks.RunAsync(Collect);
     await MultiQueryBigQueryChecks.RunAsync(Collect);
+    await BigQueryResultNameChecks.RunAsync(Collect);
     foreach (var name in failed) Console.Error.WriteLine("FAIL: " + name);
     Console.WriteLine("Passed " + passed + " BigQuery checks, failed " + failed.Count + ".");
     Environment.ExitCode = failed.IsEmpty ? 0 : 1;
@@ -158,10 +165,52 @@ if (args is ["--seal-packing-checks"])
     Console.WriteLine("Passed " + passed + " seal packing checks.");
     return;
 }
+if (args is ["--index-store-checks"])
+{
+    await IndexStoreChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " index store checks.");
+    return;
+}
+if (args is ["--bigquery-reload-checks"])
+{
+    await BigQueryReloadChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery reload checks.");
+    return;
+}
+if (args is ["--freshness-checks"])
+{
+    await FreshnessChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " freshness checks.");
+    return;
+}
+if (args is ["--sql-reload-checks"])
+{
+    await SqlReloadChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " SQL Server reload checks.");
+    return;
+}
+if (args is ["--index-file-checks"])
+{
+    await IndexFileChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " index file checks.");
+    return;
+}
+// Writes the index file format's committed files (Fixtures/IndexFile) for the current format version: only when it changes.
+if (args is [IndexFileChecks.GoldensArgument, var goldenFolder])
+{
+    await IndexFileChecks.WriteGoldens(goldenFolder);
+    return;
+}
 if (args is ["--result-name-checks"])
 {
     await ResultNameChecks.RunAsync(Check);
     Console.WriteLine("Passed " + passed + " result name checks.");
+    return;
+}
+if (args is ["--bigquery-result-name-checks"])
+{
+    await BigQueryResultNameChecks.RunAsync(Check);
+    Console.WriteLine("Passed " + passed + " BigQuery result name checks.");
     return;
 }
 // BigQuery against the emulator VARIA_TEST_BIGQUERY_ENDPOINT names (CI: live group 1, docs/ci.md); never a real project.
@@ -513,6 +562,7 @@ if (liveGroup is null)
         ("BigQueryExplorer", () => BigQueryExplorerChecks.RunAsync(Check)),
         ("BigQueryIndex", () => BigQueryIndexChecks.RunAsync(Check)),
         ("BigQueryJobHistory", () => BigQueryJobHistoryChecks.RunAsync(Check)),
+        ("BigQueryResultName", () => BigQueryResultNameChecks.RunAsync(Check)),
         ("Pivot", Sync(() => PivotChecks.Run(Check))),
         ("Distinct", Sync(() => DistinctChecks.Run(Check))),
         ("FloatExact", Sync(() => FloatExactChecks.Run(Check))),
@@ -536,6 +586,11 @@ if (liveGroup is null)
         ("Explorer", () => ExplorerChecks.RunAsync(Check)),
         ("Peek", () => PeekChecks.RunAsync(Check)),
         ("Search", Sync(() => SearchChecks.Run(Check))),
+        ("IndexFile", () => IndexFileChecks.RunAsync(Check)),
+        ("IndexStore", () => IndexStoreChecks.RunAsync(Check)),
+        ("BigQueryReload", () => BigQueryReloadChecks.RunAsync(Check)),
+        ("Freshness", () => FreshnessChecks.RunAsync(Check)),
+        ("SqlReload", () => SqlReloadChecks.RunAsync(Check)),
         ("Scripting", () => ScriptingChecks.RunAsync(Check)),
         ("Action", () => ActionChecks.RunAsync(Check)),
         ("ServerFiles", () => ServerFilesChecks.RunAsync(Check)),

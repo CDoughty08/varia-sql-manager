@@ -93,7 +93,8 @@ import { fakeLiveViews } from './live-views'
 import { SsisOperationsService } from '../../src/renderer/src/ssis/SsisOperationsService'
 import { JobActivityService } from '../../src/renderer/src/agent/JobActivityService'
 import { LogViewerService } from '../../src/renderer/src/agent/LogViewerService'
-import { AgentOverviewService, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
+import { AgentOverviewService, focusAgentOverview, type AgentOverviewFixes } from '../../src/renderer/src/agent/AgentOverviewService'
+import { stepMenuProviders } from '../../src/renderer/src/agent/step-menus'
 import { AgentJobStatusService } from '../../src/renderer/src/agent/AgentJobStatusService'
 import { JobDocumentService } from '../../src/renderer/src/agent/JobDocumentService'
 import { AlertOperatorDocumentService, alertSpec, operatorSpec, operatorsSpec } from '../../src/renderer/src/agent/AlertOperatorDocumentService'
@@ -310,6 +311,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     onActionProgress: vi.fn<VariaApi['onActionProgress']>(() => () => {}),
     onExplorerIndexProgress: vi.fn<VariaApi['onExplorerIndexProgress']>(() => () => {}),
     explorerIndex: vi.fn<VariaApi['explorerIndex']>(async () => ({ ok: true, value: { status: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
+    explorerIndexStatus: vi.fn<VariaApi['explorerIndexStatus']>(async () => ({ ok: true, value: { status: { state: 'none', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true }, elapsedMs: 0 } })),
     explorerSearch: vi.fn<VariaApi['explorerSearch']>(async () => ({ ok: true, value: { hits: [], total: 0, partial: false, elapsedMs: 0, index: { state: 'ready', databases: 0, indexed: 0, objects: 0, modules: 0, cut: 0, skipped: [], definitions: true } } })),
     cancel: vi.fn<VariaApi['cancel']>(async () => ({ ok: true, value: { cancelled: true } })),
     openSqlFiles: vi.fn<VariaApi['openSqlFiles']>(async () => ({ ok: true, value: { files: [], errors: [] } })),
@@ -336,6 +338,8 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
     createCustomTheme: vi.fn<VariaApi['createCustomTheme']>(async () => ({ ok: true, value: undefined })),
     runRole: vi.fn<VariaApi['runRole']>(async () => ({ ok: true, value: undefined })),
     clearEntraTokenCache: vi.fn<VariaApi['clearEntraTokenCache']>(async () => ({ ok: true, value: true })),
+    clearSavedSearchIndexes: vi.fn<VariaApi['clearSavedSearchIndexes']>(async () => ({ ok: true, value: { files: 0, bytes: 0, kept: 0 } })),
+    searchIndexStorage: vi.fn<VariaApi['searchIndexStorage']>(async () => ({ ok: true, value: { available: true } })),
     writeClipboardText: vi.fn<VariaApi['writeClipboardText']>(async () => ({ ok: true, value: undefined })),
     bigQueryJob: vi.fn<VariaApi['bigQueryJob']>(async () => ({ ok: false, error: 'Not in this fixture.', code: 'BACKEND_ERROR' })),
     bigQueryCancelJob: vi.fn<VariaApi['bigQueryCancelJob']>(async () => ({ ok: true, value: { cancelled: true } })),
@@ -484,11 +488,13 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   const logViewerRecycled = vi.fn<(connectionId: string) => void>()
   const logViewer = new LogViewerService({ api, documents, panes, live, connections, targetIdOf, recycled: logViewerRecycled })
   const overviewFixes = {
-    failedJobs: vi.fn<AgentOverviewFixes['failedJobs']>(), changeOwner: vi.fn<AgentOverviewFixes['changeOwner']>(), openJob: vi.fn<AgentOverviewFixes['openJob']>(),
-    agentProperties: vi.fn<AgentOverviewFixes['agentProperties']>(), recommendedAlerts: vi.fn<AgentOverviewFixes['recommendedAlerts']>(), schedules: vi.fn<AgentOverviewFixes['schedules']>(),
+    failedJobs: vi.fn<AgentOverviewFixes['failedJobs']>(), jobsView: vi.fn<NonNullable<AgentOverviewFixes['jobsView']>>(),
+    alerts: vi.fn<NonNullable<AgentOverviewFixes['alerts']>>(), changeOwner: vi.fn<AgentOverviewFixes['changeOwner']>(),
+    openJob: vi.fn<AgentOverviewFixes['openJob']>(), agentProperties: vi.fn<AgentOverviewFixes['agentProperties']>(),
+    recommendedAlerts: vi.fn<AgentOverviewFixes['recommendedAlerts']>(), schedules: vi.fn<AgentOverviewFixes['schedules']>(),
     startAgent: vi.fn<AgentOverviewFixes['startAgent']>()
   }
-  const agentOverview = new AgentOverviewService({ documents, panes, live, connections, targetIdOf, fixes: overviewFixes })
+  const agentOverview = new AgentOverviewService({ documents, panes, live, connections, targetIdOf, fixes: overviewFixes, focus: focusAgentOverview })
   const objectSearch = new ObjectSearchService({ api, documents, connections, settings, targetIdOf })
   const inputMode = new InputModeService(fakeInputMode())
   const notifications = new NotificationService(options.timers ? { timers: options.timers } : {})
@@ -554,13 +560,15 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   }
   // The menus over these services: resolution, enablement, and activation, without the DOM.
   const menuTargets = new MenuTargetService({ commandEnabled: () => true })
-  const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
+  const menus = new MenuService({ platform, commands, context, keybindings, theme, recentFiles, dynamic: stepMenuProviders(jobDocuments), settings: () => settings.getSnapshot().values, focus: focus.adapter, modalOpen: options.modal ?? (() => false), timers: options.timers, targets: menuTargets })
   const sqlLanguage = { refreshCache: vi.fn(async (_id?: string) => true) }
+  const indexCompletion = { refreshCache: vi.fn(async (_id?: string) => true) }
   const sqlDiagnostics = { getSnapshot: () => ({ documents: new Map() }), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined }
   // BigQuery's estimate chip: no estimates (the cost service's own tests cover it).
   const bigQueryCost = { getSnapshot: () => new Map(), subscribe: (_listener: () => void) => () => {}, status: (_id: string) => undefined, asksAboveThreshold: (_id: string) => true, thresholdFor: (_id: string) => 10, connectedWith: (_options: unknown, _saved?: boolean) => {} }
   const workbench = {
     sqlLanguage,
+    indexCompletion,
     sqlDiagnostics,
     bigQueryCost,
     platform,
@@ -757,6 +765,7 @@ export function workbenchFixture(options: { platform?: Platform; modal?: () => b
   return {
     ...doc,
     sqlLanguage,
+    indexCompletion,
     bigQueryCost,
     api,
     connections,

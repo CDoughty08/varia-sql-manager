@@ -21,6 +21,8 @@ internal sealed partial class BigQueryService
     public const int MaxColumnText = 1024;
     /// <summary>Characters of flat column paths, types and descriptions returned in all, keeping the response well under the frame limit.</summary>
     public const int MaxColumnChars = 1_000_000;
+    /// <summary>The Search Objects index, told of each object's details read here so it holds them (docs/object-search.md, Freshness).</summary>
+    internal Search.ObjectSearchService? ObjectDetails { get; set; }
     static readonly string[] PropertyKinds = ["bqTable", "bqView", "bqMaterializedView", "bqExternalTable", "bqRoutine", "bqDataset"];
 
     public async Task<BigQueryProperties> PropertiesAsync(BigQueryPropertiesArgs args, CancellationToken token)
@@ -42,16 +44,18 @@ internal sealed partial class BigQueryService
         {
             if (dataset)
             {
-                var found = await MetadataAsync(connection, t => connection.Client.Service.Datasets.Get(args.Project, args.Dataset).ExecuteAsync(t), budget.Token);
+                var found = await MetadataAsync(connection, BqMethod.DatasetsGet, t => connection.Client.Service.Datasets.Get(args.Project, args.Dataset).ExecuteAsync(t), budget.Token);
                 return MapDataset(found, args.Dataset, args.Project + "." + args.Dataset, watch.ElapsedMilliseconds);
             }
             var fullName = args.Project + "." + args.Dataset + "." + args.Name;
             if (routine)
             {
-                var found = await MetadataAsync(connection, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+                var found = await MetadataAsync(connection, BqMethod.RoutinesGet, t => connection.Client.Service.Routines.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+                ObjectDetails?.RoutineRead(args.ConnectionId, args.Project, args.Dataset, args.Name, found);
                 return MapRoutine(found, args.Name, fullName, watch.ElapsedMilliseconds);
             }
-            var table = await MetadataAsync(connection, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+            var table = await MetadataAsync(connection, BqMethod.TablesGet, t => connection.Client.Service.Tables.Get(args.Project, args.Dataset, args.Name).ExecuteAsync(t), budget.Token);
+            ObjectDetails?.TableRead(args.ConnectionId, args.Project, args.Dataset, args.Name, table);
             return MapTable(table, args.Name, fullName, watch.ElapsedMilliseconds);
         }
         catch (Exception error) when (error is not RequestException { Code: "INVALID_PARAMS" })

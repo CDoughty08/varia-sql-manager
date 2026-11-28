@@ -19,8 +19,8 @@ import type { ErrorCode, ErrorReason } from './ipc/wire/protocol'
 import type { AuthenticationMode, BigQueryAuthenticationMode } from './auth'
 import type { ProviderId } from './providers'
 import type { ExplorerChildrenParams, ExplorerNodeRef } from './explorer/refs.ts'
-import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
-import type { LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
+import type { BigQueryIndexEstimateRequest, BigQueryIndexEstimateResult, ObjectIndexParams, ObjectIndexProgress, ObjectIndexResult, ObjectIndexStatusParams, ObjectSearchParams, ObjectSearchResult } from './explorer/search.ts'
+import type { LanguageHydrateRequest, LanguageHydrateResult, LanguageLookupRequest, LanguageLookupResult } from './language-lookup.ts'
 import type { ExplorerIcon, NodeStatus, NodeSubtype } from './explorer/catalog.ts'
 import type { PeekDefinitionParams, PeekDefinitionResult, PeekDependenciesParams, PeekDependenciesResult, PeekParams, PeekResult } from './explorer/peek.ts'
 import type { DependenciesParams, DependenciesResult } from './explorer/dependencies.ts'
@@ -186,6 +186,8 @@ export interface QueryOptions {
   database?: string
   /** A BigQuery query's default dataset, ≤ 1,024 characters (the connection's when absent); SQL Server refuses it. */
   dataset?: string
+  /** BigQuery: run with no default dataset even when the connection sets one (mutually exclusive with `dataset`); SQL Server refuses it. */
+  noDefaultDataset?: true
   sql: string
   queryId: string
   /** Rows stored across the script's result sets, 0..2,147,483,647; 0 stores up to the memory budget only. */
@@ -470,6 +472,15 @@ export interface IndexMemoryDetail {
   packedBytes: number; packedTextBytes: number; cut: number; childrenLeftOut: number; recordBytes: number; nameBytes: number; definitionBytes: number; readingBytes: number
   lastBuildMs?: number; lastSearchMs?: number
 }
+/** How the saved Search Objects index stands (docs/object-search.md, Saved index): encrypted under the key main holds,
+ *  unencrypted by the user's choice where the system has no key store, turned off in Options, off because there is no key
+ *  store, or unavailable because its folder cannot be used. */
+export type IndexStoreMode = 'encrypted' | 'clearText' | 'disabled' | 'noKeyStore' | 'unavailable'
+/** The saved index as the Memory panel shows it: the files its folder holds, their bytes, and the disk limit. Never a
+ *  path, a key or a name. */
+export interface IndexStoreStatus { mode: IndexStoreMode; files: number; bytes: number; limitBytes: number }
+/** explorer.indexStore.clear: the files deleted, their bytes, and the files that could not be deleted. */
+export interface IndexStoreCleared { files: number; bytes: number; kept: number }
 /** Rows read so far for one result set of a running script, and why it stopped storing them once it has. */
 export interface ResultProgress { resultId: number; rowsRead: number; rowsStored: number; rowsAvailable: number; bytesStored: number; truncated?: TruncationReason }
 /** Pushed while a script runs (EVENT frames, then the results port). The summary is authoritative once it arrives. */
@@ -828,6 +839,7 @@ export interface RpcMethods {
   'explorer.children': { params: ExplorerChildrenParams; result: ExplorerChildrenResult }
   /** (Re)builds the connection's object index in backend memory; progress EVENTs, and Stop is varia:explorer-cancel. */
   'explorer.index': { params: ObjectIndexParams; result: ObjectIndexResult }
+  'explorer.indexStatus': { params: ObjectIndexStatusParams; result: ObjectIndexResult }
   /** Searches the connection's object index (names and module definitions), in backend memory. */
   'explorer.search': { params: ObjectSearchParams; result: ObjectSearchResult }
   /** Peek: a table's, view's or module's properties (and a module's text), on the Object Explorer pool; Stop is varia:explorer-cancel. */
@@ -865,6 +877,7 @@ export interface RpcMethods {
   'agent.errorLogs': { params: AgentErrorLogsRequest; result: AgentErrorLogsResult }
   'language.parse': { params: LanguageParseRequest; result: LanguageParseResult }
   'language.lookup': { params: LanguageLookupRequest; result: LanguageLookupResult }
+  'language.hydrate': { params: LanguageHydrateRequest; result: LanguageHydrateResult }
 }
 export type RpcMethod = keyof RpcMethods
 /** results.visibility: distinct result ids of the backend's current generation, at most limits.visibility.maxResults.
@@ -923,6 +936,15 @@ export interface AuthMethods {
 export interface ResultMemoryMethods {
   'results.setMemoryLimit': { params: { limitGiB: number }; result: { applied: boolean; globalBytes: number; queryBytes: number } }
 }
+/** The saved Search Objects index's methods, which only main sends: no renderer schema accepts them.
+ *  `explorer.indexStore.configure` tells each backend where the store is (a folder main names under the user-data
+ *  directory), how it is protected (`key`: 32 bytes in base64, the files' key when encrypted, a value that only names files
+ *  in clear text) and its disk limit; the request is sensitive. `explorer.indexStore.clear` deletes every saved file
+ *  (Clear Saved Search Indexes). */
+export interface IndexStoreMethods {
+  'explorer.indexStore.configure': { params: { mode: Exclude<IndexStoreMode, 'unavailable'>; folder: string; limitMiB: number; key?: string }; result: IndexStoreStatus }
+  'explorer.indexStore.clear': { params: Record<string, never>; result: IndexStoreCleared }
+}
 /** BigQuery's pre-connect methods as main sends them: the renderer's parameters with the credential material main read. */
 export interface BigQueryMainMethods {
   'bigquery.account': { params: BigQueryCredentialParams & { credential: BigQueryCredentialMaterial }; result: BigQueryAccount }
@@ -942,7 +964,7 @@ export interface DebugMethods {
 /** Every method main sends to the backend. */
 /** Main compresses plan input before the existing 4 MiB request boundary. Renderers can supply only raw XML. */
 export interface PlanMethods { 'plans.parse': { params: { xml: string; encoding: 'gzip' }; result: PlanDocument } }
-export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, BigQueryMainMethods, DebugMethods {
+export interface BackendMethods extends Omit<RpcMethods, 'plans.parse' | 'connections.connect' | 'connections.databases' | 'bigquery.account' | 'bigquery.projects'>, PlanMethods, PortMethods, JobMethods, AuthMethods, ResultMemoryMethods, IndexStoreMethods, BigQueryMainMethods, DebugMethods {
   'connections.connect': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: ConnectionInfo }
   'connections.databases': { params: (ConnectionOptions & { nonInteractive?: boolean }) | BigQueryBackendConnectOptions; result: DatabaseInfo[] }
 }
@@ -1066,6 +1088,10 @@ export interface VariaApi {
   onConnectionBindingsChanged(callback: (event: ConnectionBindingsChanged) => void): () => void
   /** Help › Clear Entra ID Token Cache: main asks first; resolves to false when the user cancels. */
   clearEntraTokenCache(): Promise<ApiResult<boolean>>
+  /** Clear Saved Search Indexes: main has the backend delete every file of the saved index. */
+  clearSavedSearchIndexes(): Promise<ApiResult<IndexStoreCleared>>
+  /** Whether the system has a key store to encrypt the saved Search Objects index with (Options says so when it has none). */
+  searchIndexStorage(): Promise<ApiResult<SecretStorageState>>
   discoverServers(scope: 'local' | 'network'): Promise<ApiResult<{ servers: DiscoveredServer[]; warning?: string }>>
   previewConnection(options: ConnectionOptions): Promise<ApiResult<{ connectionString: string }>>
   /** Both engines' saved connections: SQL Server's `library`, and BigQuery's (key files by name only). */
@@ -1118,6 +1144,7 @@ export interface VariaApi {
   explorerCancel(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>
   /** Builds a connection's object index; it answers once every database was read or skipped. Stop it with explorerCancel. */
   explorerIndex(params: ObjectIndexParams): Promise<ApiResult<ObjectIndexResult>>
+  explorerIndexStatus(params: ObjectIndexStatusParams): Promise<ApiResult<ObjectIndexResult>>
   /** Searches a connection's object index; a search replaced by a newer one is cancelled with explorerCancel. */
   explorerSearch(params: ObjectSearchParams): Promise<ApiResult<ObjectSearchResult>>
   /** Peek's read of one object; a card closed before it answers cancels it with explorerCancel. */
@@ -1164,6 +1191,8 @@ export interface VariaApi {
   languageParse(params: LanguageParseRequest): Promise<ApiResult<LanguageParseResult>>
   /** The Search Objects index by path, for the editor's completion and hover (BigQuery connections; src/shared/language-lookup.ts). */
   languageLookup(params: LanguageLookupRequest): Promise<ApiResult<LanguageLookupResult>>
+  /** Free on-demand REST tables.get / routines.get schema hydration for referenced BigQuery objects (src/shared/language-lookup.ts). */
+  languageHydrate(params: LanguageHydrateRequest): Promise<ApiResult<LanguageHydrateResult>>
   /** Cancels SSIS requests by their `requestId`s (1–64); `cancelled` counts those still running. A request cancelled this way
    *  answers `CANCELLED`. */
   cancelSsis(requestIds: readonly string[]): Promise<ApiResult<{ cancelled: number }>>

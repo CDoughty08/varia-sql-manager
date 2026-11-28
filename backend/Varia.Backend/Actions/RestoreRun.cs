@@ -212,7 +212,7 @@ internal sealed partial class ActionService
     /// <summary>Why a file a restore writes would overwrite what is not the destination's, or null: each of <paramref name="listed"/>
     /// where it goes (its move, or where the backup had it), every move's path, and the other files it writes (a standby file, a log backup).</summary>
     private async Task<ActionError?> WrittenProblemAsync(SqlConnection connection, string database, IReadOnlyList<ListedFile> listed, IReadOnlyList<RestoreMoveDto> relocate,
-        IReadOnlyList<(string Path, string What)> written, RestoreFacts facts, bool linux, CancellationToken token)
+        IReadOnlyList<(string Path, string What)> written, RestoreFacts facts, bool linux, CancellationToken token, string page = "Files page", IReadOnlySet<string>? restoredNames = null)
     {
         var moves = relocate.GroupBy(move => move.Logical, StringComparer.OrdinalIgnoreCase).ToDictionary(group => group.Key, group => group.First().Physical, StringComparer.OrdinalIgnoreCase);
         var targets = listed.Select(file => moves.TryGetValue(file.Logical, out var to) ? to : file.Physical).Concat(relocate.Select(move => move.Physical)).Distinct(StringComparer.Ordinal).ToList();
@@ -220,6 +220,7 @@ internal sealed partial class ActionService
         // Every database's files, keyed as the files they name.
         var held = new Dictionary<string, string>(StringComparer.Ordinal);
         var own = new HashSet<string>(StringComparer.Ordinal);
+        var unrestoredKeys = new HashSet<string>(StringComparer.Ordinal);
         await using (var command = connection.CreateCommand())
         {
             command.CommandText = RestoreSql.ServerFiles;
@@ -230,17 +231,31 @@ internal sealed partial class ActionService
             {
                 if (reader.IsDBNull(1) || ServerPath.Key(reader.GetString(1), linux) is not { } key) continue;
                 var name = reader.GetString(0);
-                if (string.Equals(name, database, StringComparison.OrdinalIgnoreCase)) own.Add(key);
+                var logical = reader.FieldCount > 2 && !reader.IsDBNull(2) ? reader.GetString(2) : null;
+                if (string.Equals(name, database, StringComparison.OrdinalIgnoreCase))
+                {
+                    own.Add(key);
+                    if (restoredNames is not null && (logical is null || !restoredNames.Contains(logical)))
+                        unrestoredKeys.Add(key);
+                }
                 else held.TryAdd(key, name);
             }
         }
         string Path(string path) => ScriptingErrors.Display(path);
         ActionError NotAPath(string path) => Error("PATH_NOT_FOUND", Path(path) + " is not a full path to a file on this server" + (linux ? " (SQL Server runs on Linux, so paths start with /)." : "."));
+        var seenTargets = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in listed)
+        {
+            var destination = moves.TryGetValue(file.Logical, out var to) ? to : file.Physical;
+            if (ServerPath.Key(destination, linux) is not { } key) return NotAPath(destination);
+            if (unrestoredKeys.Contains(key)) return Error("NAME_IN_USE", "The file " + Path(destination) + " is used by another file of " + Path(database) + ". Choose another path on the " + page + ".");
+            if (!seenTargets.Add(key)) return Error("NAME_IN_USE", "Two files would restore to " + Path(destination) + ". Choose another path on the " + page + ".");
+        }
         var unknown = new List<string>();
         foreach (var target in targets)
         {
             if (ServerPath.Key(target, linux) is not { } key) return NotAPath(target);
-            if (held.TryGetValue(key, out var holder)) return Error("NAME_IN_USE", "The file " + Path(target) + " belongs to the database " + Path(holder) + ". Choose another path on the Files page.");
+            if (held.TryGetValue(key, out var holder)) return Error("NAME_IN_USE", "The file " + Path(target) + " belongs to the database " + Path(holder) + ". Choose another path on the " + page + ".");
             if (!own.Contains(key)) unknown.Add(target);
         }
         foreach (var (path, what) in written)
@@ -253,7 +268,7 @@ internal sealed partial class ActionService
         // A Restore As path SQL Server may overwrite (WITH REPLACE) that is on disk but no database's file: a detached database's, one
         // left by a cancelled restore, or another database's under a spelling the key does not resolve (a short name, another share).
         if (await ExistingAsync(connection, unknown, facts, token) is { Count: > 0 } existing)
-            return Error("NAME_IN_USE", "The file " + Path(unknown[existing[0]]) + " is already on the server and is not a file of " + Path(database) + ": restoring would overwrite it. Choose another path on the Files page, or delete the file.");
+            return Error("NAME_IN_USE", "The file " + Path(unknown[existing[0]]) + " is already on the server and is not a file of " + Path(database) + ": restoring would overwrite it. Choose another path on the " + page + ", or delete the file.");
         return null;
     }
 
