@@ -1918,11 +1918,12 @@ const agentOutcomes = { 0: 'Failed', 1: 'Succeeded', 3: 'Canceled' }
 const agentStamp = text => Number(text.replace(/\D/g, ''))
 const agentRunning = job => agentRuns.has(job.id)
 /** Each list or watched sample moves a started run on; after two it ends (Succeeded, or Canceled when stopped). */
-function agentAdvance() {
+function agentAdvance(probeName) {
   for (const [id, run] of agentRuns) {
     // The Agent session's run (activity-agent-job) lasts until Stop Job ends it: its session row says the job runs, so Stop must find it.
     if (run.held && !run.stopped) continue
-    if (run.flow) { flowAdvance(id, run); continue }
+    // agent-flow-runs advances one step per watched sample, never on a background Job Activity Monitor's list probe.
+    if (run.flow) { if (probeName === 'agent.jobs.watched') flowAdvance(id, run); continue }
     if (run.samples++ < 2) continue
     Object.assign(agentJobs.find(job => job.id === id), { outcome: run.stopped ? 3 : 1, lastRun: run.started })
     agentRuns.delete(id)
@@ -1933,7 +1934,7 @@ function agentJobsSample(live, probe) {
     const [agentXps, serviceState, startupType, clustered = 0] = explorerStatus()?.agent ?? [1, 4, 2]
     return { status: [{ id: 'agentXps', value: agentXps }, { id: 'serviceState', value: serviceState }, { id: 'startupType', value: startupType }, { id: 'clustered', value: clustered }] }
   }
-  agentAdvance()
+  agentAdvance(probe.probe)
   if (probe.probe === 'agent.jobs.watched') {
     const metrics = liveProbes['agent.jobs.watched'].series.map(() => null)
     ;(live.args.watch ?? []).forEach((id, slot) => {

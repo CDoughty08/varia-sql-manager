@@ -89,10 +89,18 @@ const hasItems = (items: readonly ResolvedMenuItem[]) => items.some(item => item
 const inside = (target: EventTarget | null, selector: string) => typeof (target as Partial<Element> | null)?.closest === 'function' && !!(target as Element).closest(selector)
 /** The banner's words for a menu item chosen after it stopped being available. */
 const unavailableMessage = (title: string) => `“${title.replace(/…$/, '')}” is no longer available: something changed after the menu opened.`
-/** How far `element` and each element around it are scrolled, by element. */
-function scrollPositions(element: Element): ReadonlyMap<EventTarget, readonly [number, number]> {
-  const positions = new Map<EventTarget, readonly [number, number]>()
+/** The element whose scroll offsets `target` reports: a document's scrolling element for viewport scrolls, or the element itself. */
+function scrollElement(target: EventTarget): Partial<Element> {
+  const doc = target as Partial<Document>
+  return doc.scrollingElement ?? doc.documentElement ?? (target as Partial<Element>)
+}
+/** How far `element`, each element around it, and its document are scrolled, by event target. */
+function scrollPositions(element: Element): ReadonlyMap<EventTarget, readonly [number | undefined, number | undefined]> {
+  const positions = new Map<EventTarget, readonly [number | undefined, number | undefined]>()
   for (let node: Element | null = element; node; node = node.parentElement) positions.set(node, [node.scrollTop, node.scrollLeft])
+  const doc = element.ownerDocument
+  const root = doc ? doc.scrollingElement ?? doc.documentElement : null
+  if (doc && root) positions.set(doc, [root.scrollTop, root.scrollLeft])
   return positions
 }
 /** The item a focused composite widget names as active (`aria-activedescendant`), when it is inside the widget. */
@@ -142,7 +150,7 @@ export class MenuService implements Disposable {
    * script, or the wheel just before a right-click, on a window that draws few frames) can arrive while the menu shows:
    * only a scroll that moved one of them since closes it.
    */
-  private scrolled?: ReadonlyMap<EventTarget, readonly [number, number]>
+  private scrolled?: ReadonlyMap<EventTarget, readonly [number | undefined, number | undefined]>
   private readonly native?: NativeMenuPresenter
   private readonly subscriptions: Disposable[]
   private readonly detachers = new Set<() => void>()
@@ -408,10 +416,12 @@ export class MenuService implements Disposable {
     const delta = rect.top < top ? rect.top - top : rect.bottom > bottom ? Math.min(rect.bottom - bottom, rect.top - top) : 0
     if (delta) widget.scrollTop += delta
   }
-  /** Whether a scroll event's element is one the open context menu recorded, still where it was when the menu opened. */
+  /** Whether a scroll event's target is one the open context menu recorded, still where it was when the menu opened. */
   private unmoved(target: EventTarget | null): boolean {
     const at = target ? this.scrolled?.get(target) : undefined
-    return !!at && (target as Element).scrollTop === at[0] && (target as Element).scrollLeft === at[1]
+    if (!at || !target) return false
+    const scrollable = scrollElement(target)
+    return scrollable.scrollTop === at[0] && scrollable.scrollLeft === at[1]
   }
   /** The menus took the keyboard: remember where focus was, unless a menu replaced another one. */
   private ownershipChanged(): void {

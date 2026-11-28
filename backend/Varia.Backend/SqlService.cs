@@ -1413,8 +1413,11 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                 : "Line " + item.LineNumber;
             return "Msg " + item.Number + ", Level " + item.Class + ", State " + item.State + ", " + location + "\n" + item.Message;
         }
-        Microsoft.Data.SqlClient.SqlInfoMessageEventHandler onInfo = (_, e) =>
+        Microsoft.Data.SqlClient.SqlInfoMessageEventHandler onInfo = (sender, e) =>
         {
+            // onInfo subscribes before each batch attaches StatementStop; mark the batch streaming before messages.Add
+            // can publish a live message event that triggers Stop from another thread.
+            if (sender is SqlConnection source) ActionService.StatementStop.NoteMessage(source);
             // With FireInfoMessageEventOnUserErrors, severity 11-16 errors arrive here instead of aborting the reader,
             // so SQL Server (not the client) decides whether the rest of the batch runs, as in SSMS.
             foreach (SqlError error in e.Errors)
@@ -1566,7 +1569,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     // cancels inside the next message instead. So the token reaches no SqlClient call of the batch: SqlClient's
                     // own registration would cancel from another thread too, and the two together deadlock.
                     var statementStop = new ActionService.StatementStop(command, token);
-                    connection.InfoMessage += statementStop.OnMessage;
+                    statementStop.Attach(connection);
                     using var stop = token.UnsafeRegister(static state => ((ActionService.StatementStop)state!).FromOtherThread(), statementStop);
                     command.StatementCompleted += (_, e) => { if (e.RecordCount >= 0) messages.Add(e.RecordCount == 1 ? "(1 row affected)" : "(" + e.RecordCount + " rows affected)"); };
                     SqlDataReader? reader = null;
@@ -1744,7 +1747,7 @@ internal sealed partial class SqlService : IRequestDispatcher, IExplorerHost, IS
                     finally
                     {
                         if (reader is not null) await reader.DisposeAsync();
-                        connection.InfoMessage -= statementStop.OnMessage;
+                        statementStop.Detach(connection);
                     }
                     // Now and then (about once in 600 of the live check's timed WAITFORs under load) SqlClient ends a cancelled
                     // batch's reader as if the batch had finished and raises no "Operation cancelled", though SQL Server

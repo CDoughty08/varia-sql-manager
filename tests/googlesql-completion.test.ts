@@ -8,6 +8,7 @@ import type { CompletionItem, CompletionSite, IndexLookup, ScopeSource } from '.
 import { googleSqlDialect, quoteGoogleSqlName } from '../src/shared/googlesql/dialect'
 import { readGoogleSqlCompletion, readGoogleSqlHover, readGoogleSqlStatementSources } from '../src/shared/googlesql/scope'
 import { languageLookupLimits, languageLookupRequestSchema, languageLookupResultSchema, type LanguageLookupAnswer, type LanguageLookupItem, type LanguageLookupPath, type LanguageLookupResult } from '../src/shared/language-lookup'
+import { heavyTimeout, meterWork } from './fixtures/work-meter'
 
 /** `|` marks the caret. */
 function at(source: string): { text: string; offset: number } {
@@ -277,10 +278,11 @@ describe('GoogleSQL scope reader', () => {
   })
 
   it('reads text with many FROMs and long WITH chains without slowing down or overflowing', async () => {
-    const started = performance.now()
     const froms = 'SELECT 1 ' + 'FROM a '.repeat(30000)
-    readGoogleSqlCompletion(froms, froms.length)
-    expect(performance.now() - started).toBeLessThan(2000)
+    // Bound by deterministic metered work rather than wall clock, which stretches past 3 s on contended 3-vCPU CI runners.
+    const { work: fromsWork } = meterWork(() => readGoogleSqlCompletion(froms, froms.length))
+    expect(fromsWork.elements, JSON.stringify(fromsWork)).toBeLessThan(1_000_000)
+    expect(fromsWork.costly, JSON.stringify(fromsWork)).toBeLessThan(2_000_000)
     const chain = Array.from({ length: 3000 }, (_, index) => `a${index} AS (SELECT * FROM ${index ? `a${index - 1}` : 'sales.orders'})`)
     const text = `WITH ${chain.join(', ')} SELECT  FROM a2999`
     const offset = text.indexOf('SELECT  FROM') + 'SELECT '.length
@@ -290,25 +292,29 @@ describe('GoogleSQL scope reader', () => {
     const short = `WITH ${near.join(', ')} SELECT  FROM a2`
     const columns = await completeFromIndex(readGoogleSqlCompletion(short, short.indexOf('  FROM') + 1), dialect, fakeLookup())
     expect(columns.items.filter(item => item.kind === 'column').map(item => item.label)).toContain('customer')
-    // The chain's completion itself stays quick, and so do many sources of one wide table.
-    const timed = performance.now()
-    await completeFromIndex(readGoogleSqlCompletion(text, offset), dialect, fakeLookup())
+    // The chain's completion itself stays linear, and so do many sources of one wide table.
     const many = 'SELECT  FROM ' + Array.from({ length: 1000 }, () => '`varia-wide.lab.wide`').join(', ')
-    await completeFromIndex(readGoogleSqlCompletion(many, 'SELECT '.length), dialect, fakeLookup())
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    const { work: chainWork } = await meterWork(async () => {
+      await completeFromIndex(readGoogleSqlCompletion(text, offset), dialect, fakeLookup())
+      await completeFromIndex(readGoogleSqlCompletion(many, 'SELECT '.length), dialect, fakeLookup())
+    })
+    expect(chainWork.elements, JSON.stringify(chainWork)).toBeLessThan(2_000_000)
+    expect(chainWork.costly, JSON.stringify(chainWork)).toBeLessThan(2_000_000)
+  }, heavyTimeout)
 
   it('reads subqueries and WITH queries over a wide table without work growing with its width squared', async () => {
     const wide = '`varia-wide.lab.wide`'
     const subqueries = 'SELECT c24 FROM ' + Array.from({ length: 200 }, (_, index) => `(SELECT * FROM ${wide}) s${index}`).join(', ')
     const chain = 'WITH ' + Array.from({ length: 60 }, (_, index) => `w${index} AS (SELECT * FROM ${index ? `w${index - 1}` : wide})`).join(', ') + ' SELECT c24 FROM w59, w59 AS again'
-    const timed = performance.now()
-    const first = await completeFromIndex(readGoogleSqlCompletion(subqueries, 'SELECT c24'.length), dialect, fakeLookup())
-    const second = await completeFromIndex(readGoogleSqlCompletion(chain, chain.indexOf('SELECT c24') + 'SELECT c24'.length), dialect, fakeLookup())
-    expect(performance.now() - timed).toBeLessThan(3000)
+    const { result: [first, second], work } = await meterWork(async () => [
+      await completeFromIndex(readGoogleSqlCompletion(subqueries, 'SELECT c24'.length), dialect, fakeLookup()),
+      await completeFromIndex(readGoogleSqlCompletion(chain, chain.indexOf('SELECT c24') + 'SELECT c24'.length), dialect, fakeLookup())
+    ])
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(2_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(200_000)
     expect(first.items.some(item => item.filterText === 'c2499' && item.label === 's0.c2499')).toBe(true)
     expect(second.items.filter(item => item.filterText === 'c2499').map(item => item.label)).toEqual(['w59.c2499', 'again.c2499'])
-  })
+  }, heavyTimeout)
 
   it('reads a dot after a project id that ends in digits', () => {
     expect(read('SELECT * FROM my-project-123456.|').site).toEqual({ kind: 'object', qualifier: ['my-project-123456'] })
@@ -574,11 +580,13 @@ describe('GoogleSQL scope reader', () => {
   it('reads deeply nested subqueries in bounded time and without overflowing', () => {
     const depth = 3000
     const text = 'SELECT '.padEnd(7) + '* FROM ('.repeat(depth) + 'SELECT id FROM t' + ') q'.repeat(depth)
-    const started = performance.now()
-    expect(() => readGoogleSqlCompletion(text, 7)).not.toThrow()
-    expect(() => readGoogleSqlCompletion(text, text.indexOf('id'))).not.toThrow()
-    expect(performance.now() - started).toBeLessThan(2000)
-  })
+    const { work } = meterWork(() => {
+      expect(() => readGoogleSqlCompletion(text, 7)).not.toThrow()
+      expect(() => readGoogleSqlCompletion(text, text.indexOf('id'))).not.toThrow()
+    })
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(500_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(1_000_000)
+  }, heavyTimeout)
 
   it('reads the targets of UPDATE, DELETE, MERGE and INSERT', () => {
     expect(names(read('UPDATE sales.orders SET |').scope.sources)).toEqual(['orders=sales.orders'])
@@ -680,24 +688,28 @@ describe('completion from the index', () => {
     const hop65WithShallow = await complete(`${chain65} SELECT | FROM w64, w0`)
     expect(hop65WithShallow.incomplete).toBe(true)
     expect(hop65WithShallow.labels('column')).toContain('customer')
-    const timed = performance.now()
     const bare = 'SELECT c24| FROM `varia-wide.lab.wide` w' + ', UNNEST(zrec) u'.repeat(11000)
-    await complete(bare)
-    // A dbt-style diamond (each WITH query joins the two before it) past the star budget, and a deep one named thousands of times.
     const diamond = 'WITH c0 AS (SELECT * FROM sales.orders), c1 AS (SELECT * FROM sales.orders), ' + Array.from({ length: 98 }, (_, index) => `c${index + 2} AS (SELECT * FROM c${index + 1} JOIN c${index} USING (id))`).join(', ') + ' SELECT | FROM c99'
-    expect((await complete(diamond)).labels('column')).toContain('customer')
     const deep = 'WITH ' + Array.from({ length: 70 }, (_, index) => `c${index} AS (SELECT * FROM ${index ? `c${index - 1}` : 'sales.orders'})`).join(', ') + ' SELECT cu| FROM ' + Array.from({ length: 10000 }, (_, index) => `c69 x${index}`).join(', ')
-    await complete(deep)
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    const { result: diamondResult, work } = await meterWork(async () => {
+      await complete(bare)
+      // A dbt-style diamond (each WITH query joins the two before it) past the star budget, and a deep one named thousands of times.
+      const found = await complete(diamond)
+      await complete(deep)
+      return found
+    })
+    expect(diamondResult.labels('column')).toContain('customer')
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(6_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(3_000_000)
+  }, heavyTimeout)
 
   it('bounds the work of a web of WITH queries over a wide table, nearest listed first, and says the list is cut short', async () => {
     // A table that comes back whole: only the cap can make the list incomplete.
     const wide = '`varia-wide.lab.whole`'
     const web = 'WITH ' + Array.from({ length: 522 }, (_, index) => `c${index} AS (SELECT * FROM ${wide} w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ') + ' SELECT c00| FROM c521'
-    const timed = performance.now()
-    const list = await complete(web)
-    expect(performance.now() - timed).toBeLessThan(3000)
+    const { result: list, work: webWork } = await meterWork(() => complete(web))
+    expect(webWork.elements, JSON.stringify(webWork)).toBeLessThan(4_000_000)
+    expect(webWork.costly, JSON.stringify(webWork)).toBeLessThan(1_000_000)
     expect(list.labels('column')).toContain('c0000')
     expect(list.incomplete).toBe(true)
     // UNNESTs past the cap over a table that was not cut short leave the list final.
@@ -706,9 +718,10 @@ describe('completion from the index', () => {
     // Thousands of UNNESTs through a WITH query of many named columns count against the cap too.
     const named = Array.from({ length: 20000 }, (_, index) => `x${index}`).join(', ')
     const unnests = `WITH c AS (SELECT ${named} FROM sales.orders) SELECT q| FROM \`varia-wide.lab.wide\` w, c` + Array.from({ length: 6000 }, (_, index) => `, UNNEST(c.ab) u${index}`).join('')
-    const started = performance.now()
-    expect((await complete(unnests)).incomplete).toBe(true)
-    expect(performance.now() - started).toBeLessThan(2000)
+    const { result: unnestResult, work: unnestWork } = await meterWork(() => complete(unnests))
+    expect(unnestResult.incomplete).toBe(true)
+    expect(unnestWork.elements, JSON.stringify(unnestWork)).toBeLessThan(4_000_000)
+    expect(unnestWork.costly, JSON.stringify(unnestWork)).toBeLessThan(3_000_000)
     // A member list whose source the cap cut is not final, though every answer came back whole.
     const copies = Array.from({ length: 600 }, (_, index) => `c0 a${index}`).join(', ')
     const member = await complete(`WITH c0 AS (SELECT * FROM \`varia-wide.lab.whole\`), c1 AS (SELECT * FROM ${copies}) SELECT items.| FROM c1, sales.orders o`)
@@ -716,7 +729,7 @@ describe('completion from the index', () => {
     // A second ask (one typed letter beside a table cut short) lists what the first did: it has a cap of its own.
     const web80 = 'WITH ' + Array.from({ length: 80 }, (_, index) => `c${index} AS (SELECT * FROM \`varia-wide.lab.whole\` w${Array.from({ length: Math.min(8, index) }, (_, back) => `, c${index - 1 - back} a${back}`).join('')})`).join(', ')
     expect((await complete(`${web80} SELECT x.c| FROM c79 x, \`varia-wide.lab.wide\` z`)).labels('column').length).toBeGreaterThanOrEqual(1900)
-  })
+  }, heavyTimeout)
 
   it('follows a long chain of UNNESTs, each reading the last, without overflowing', async () => {
     const chain = (count: number) => Array.from({ length: count }, (_, index) => `, UNNEST(${index ? `u${index - 1}.zz` : 'o.items'}) u${index}`).join('')
@@ -730,25 +743,34 @@ describe('completion from the index', () => {
   it('reads a star repeated over many sources, and many dotted FROM items, in bounded time', async () => {
     const stars = `WITH c AS (SELECT ${Array(10000).fill('*').join(',')} FROM ${Array(20000).fill('sales.orders').join(',')}) SELECT | FROM c`
     const dotted = 'SELECT | FROM sales.orders o0' + ', x.y z'.repeat(35000)
-    const timed = performance.now()
-    const read = readGoogleSqlCompletion(stars, stars.indexOf('| FROM c'))
+    const { result: [read, starsResult], work } = await meterWork(async () => {
+      const read = readGoogleSqlCompletion(stars, stars.indexOf('| FROM c'))
+      const starsResult = await complete(stars)
+      await complete(dotted)
+      return [read, starsResult] as const
+    })
     expect(read.scope.ctes[0].shape.stars.length).toBeLessThanOrEqual(20000)
-    expect((await complete(stars)).labels('column')).toContain('customer')
-    await complete(dotted)
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    expect(starsResult.labels('column')).toContain('customer')
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(8_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(10_000_000)
+  }, heavyTimeout)
 
   it('reads huge FROM lists, quoted paths and qualified stars without throwing, in bounded time', async () => {
-    const timed = performance.now()
     const many = 'SELECT  FROM ' + 'a,'.repeat(124000) + 'a'
-    expect(readGoogleSqlCompletion(many, 7).scope.sources.length).toBe(124001)
-    expect(readGoogleSqlHover(many, many.length - 1)).toBeDefined()
     const path = '`' + 'a.'.repeat(124000) + 'a`'
-    for (const text of [`SELECT * FROM (SELECT ${path}) q WHERE `, `SELECT * FROM UNNEST(${path}) WHERE `, `SELECT * FROM x.${path} WHERE `]) expect(() => readGoogleSqlCompletion(text, text.length)).not.toThrow()
     const qualified = `WITH c AS (SELECT ${Array(30000).fill('zz.*').join(', ')} FROM ${Array.from({ length: 10000 }, (_, index) => `t a${index}`).join(', ')}) SELECT  FROM c`
-    readGoogleSqlCompletion(qualified, qualified.length - ' FROM c'.length)
-    expect(performance.now() - timed).toBeLessThan(3000)
-  })
+    const { result: [sourcesCount, hover], work } = meterWork(() => {
+      const sourcesCount = readGoogleSqlCompletion(many, 7).scope.sources.length
+      const hover = readGoogleSqlHover(many, many.length - 1)
+      for (const text of [`SELECT * FROM (SELECT ${path}) q WHERE `, `SELECT * FROM UNNEST(${path}) WHERE `, `SELECT * FROM x.${path} WHERE `]) readGoogleSqlCompletion(text, text.length)
+      readGoogleSqlCompletion(qualified, qualified.length - ' FROM c'.length)
+      return [sourcesCount, hover] as const
+    })
+    expect(sourcesCount).toBe(124001)
+    expect(hover).toBeDefined()
+    expect(work.elements, JSON.stringify(work)).toBeLessThan(12_000_000)
+    expect(work.costly, JSON.stringify(work)).toBeLessThan(12_000_000)
+  }, heavyTimeout)
 
   it('bounds UNNESTs and stars nested together, and says a bare name past a cut source is not final', async () => {
     const levels = Array.from({ length: 256 }, (_, index) => {
