@@ -47,6 +47,8 @@ async function run(sql) {
 /** Runs `move` and answers the popout window's page it opened. */
 async function popsOut(move) {
   const opened = application.waitForEvent('window', { timeout: 30000 })
+  // Attach a rejection handler before `move()` so a failure in `move()` is never masked when `finally` closes the app.
+  opened.catch(() => {})
   await move()
   // A rare Windows CI timeout here left nothing to go on: main denies a popout off every display's work area, and the
   // page then shows why in its banner.
