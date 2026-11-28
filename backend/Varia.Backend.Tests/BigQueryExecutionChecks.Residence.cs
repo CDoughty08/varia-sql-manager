@@ -460,7 +460,8 @@ internal static partial class BigQueryExecutionChecks
         {
             var store = new ResultStore(1L << 30, 1L << 29);
             var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously), Before = first => first == 40 * 256 ? release.Task : Task.CompletedTask };
+            // Hold only block 40 on the gate: holding read-ahead blocks too can fill both result lanes before block 40 enters.
+            var held = new Blocks { Gate = new(TaskCreationOptions.RunContinuationsAsynchronously), Holds = first => first == 40 * 256, Before = first => first == 40 * 256 ? release.Task : Task.CompletedTask };
             using var jumped = Remote(store, held);
             using var stopJump = new CancellationTokenSource();
             var first = jumped.ReadAsync(40 * 256, 10, 0, _ => ValueTask.CompletedTask, TimeSpan.FromSeconds(30), stopJump.Token);
@@ -666,7 +667,9 @@ internal static partial class BigQueryExecutionChecks
         {
             var store = new ResultStore(1L << 30, 1L << 29);
             var blocks = new Blocks { Pad = 2_000 };
-            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 64L << 20);
+            // 24 MiB holds block 0, block 20 and one read-ahead block (block 21), so at most two fetches share the two result lanes
+            // and read-ahead cannot starve block 20 while waiting on ownReserved inside Reserving.
+            using var remote = Remote(store, blocks, rowBytes: 32_768, cache: 24L << 20);
             var size = remote.BlockRows;
             await ReadRemote(remote, 0, 10, viewer: 1);
             await WaitUntilAsync(() => remote.FetchingBlocks() == 0, 15_000);

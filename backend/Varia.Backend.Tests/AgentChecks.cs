@@ -162,6 +162,29 @@ internal static class AgentChecks
             check(code == "CANCELLED" && service.RunningCount == 0,
                 "agent.profile whose connection is disconnected during the server-scope read is CANCELLED, not a no-role profile: " + (code ?? "answered"));
         }
+        // SqlClient's TdsParserStateObject.ExecuteFlush can throw InvalidOperationException ("Operation cancelled by user.")
+        // when a disconnect cancels ExecuteReaderAsync mid-flush on Windows LPC; RunAsync maps it to cancellation.
+        var flushReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using (var service = new ExplorerService(refusing, new ExplorerOptions
+        {
+            TestStatementFailure = async (_, _, token) =>
+            {
+                flushReached.TrySetResult();
+                try { await Task.Delay(TimeSpan.FromSeconds(10), token); }
+                catch (OperationCanceledException) { throw new InvalidOperationException("Operation cancelled by user."); }
+                return NoMsdb();
+            }
+        }))
+        {
+            var args = Args();
+            var call = service.AgentProfileAsync(args, CancellationToken.None);
+            await flushReached.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            service.Forget(args.ConnectionId);
+            string? code = null;
+            try { await call; } catch (RequestException error) { code = error.Code; }
+            check(code == "CANCELLED" && service.RunningCount == 0,
+                "agent.profile maps SqlClient's cancelled InvalidOperationException on disconnect to CANCELLED: " + (code ?? "answered"));
+        }
         // A server-scope read whose connection the server refuses to open (18456) is that error, not "no role".
         var opens = 0;
         var disabled = new ExplorerChecks.FakeHost { Opening = (_, _) => Interlocked.Increment(ref opens) == 1 ? Task.CompletedTask
