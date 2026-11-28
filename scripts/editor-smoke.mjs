@@ -724,6 +724,20 @@ try {
   await menu('Query tab').getByRole('menuitem', { name: 'Float', exact: true }).click()
   await expect(floatingEditorGroups(page)).toHaveCount(1)
   await expect(editorGroupTabs(floatingEditorGroups(page))).toHaveCount(1)
+  // A Shift+click in the floated query's text extends its selection, and the float stays put: Dockview moved the whole
+  // float on any Shift-press inside it, taking the pointer from the editor.
+  const floatingWord = floatingEditorGroups(page).locator('.monaco-editor .view-lines').getByText('second', { exact: true })
+  const wordBox = await floatingWord.boundingBox(), floatBefore = await floatingEditorGroups(page).boundingBox()
+  await page.mouse.click(wordBox.x + 1, wordBox.y + wordBox.height / 2)
+  await page.keyboard.down('Shift')
+  await page.mouse.move(wordBox.x + wordBox.width - 1, wordBox.y + wordBox.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(wordBox.x + wordBox.width + 30, wordBox.y + wordBox.height / 2 + 20, { steps: 4 })
+  await page.mouse.up()
+  await page.keyboard.up('Shift')
+  await expect(floatingEditorGroups(page).locator('.monaco-editor .selected-text').first()).toBeAttached()
+  expect(await floatingEditorGroups(page).boundingBox()).toEqual(floatBefore)
+  await page.keyboard.press('ArrowRight')
   // The dragged float covers the destination's compass. Its content must not steal the drop from the shown target.
   const destinationGroup = editorGroups(page).filter({ has: documentTab(page, firstTab) })
   const destinationBox = await destinationGroup.boundingBox(), titlebar = page.locator('.dv-resize-container').filter({ has: documentTab(page, secondTab) }).locator('.dv-floating-titlebar')
@@ -982,7 +996,7 @@ try {
     return label
   })
   expect(renamed).toBe('After sections')
-  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, compass drops and moves between split tab strips clear both guides and highlights, Join All Editor Groups, Float and Dock, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, a Shift+click that floats nothing, every query floating, and the 16-group cap.')
+  console.log('Editor checks: Split Editor Right, focus between groups, Move Editor into Previous Group, compass drops and moves between split tab strips clear both guides and highlights, Join All Editor Groups, Float and Dock, Shift+click selecting in a floated query without moving it, a close showing its own group\'s next tab, tab keys, Delete on a focused tab (the shown one or not) while File › Close Query closes the shown one, a Shift+click that floats nothing, every query floating, and the 16-group cap.')
 
   // A plan panel moves with its Graph / XML choice and edits, while its group borrows the same Monaco editor as a query.
   const planName = 'multiple.sqlplan'
