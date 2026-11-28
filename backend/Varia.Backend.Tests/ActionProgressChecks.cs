@@ -24,6 +24,7 @@ internal static class ActionProgressChecks
         await LateHoldersAsync(check);
         await GatesAsync(check);
         await DrainAsync(check);
+        await StatementStopAsync(check);
     }
 
     /// <summary>A host whose connections open only once released, so a job holds its gates for as long as a check needs.</summary>
@@ -299,5 +300,70 @@ internal static class ActionProgressChecks
         check(gaveUp && stillRunning && waited is >= 250 and < 9_000 && drained && drainedMs is >= 250 and < 25_000 && jobEnded,
             $"after CancelAll a shutdown waits for each long job (not the others) up to its Stop wait plus cleanup budget, and returns once they ended: gave up after {waited} ms"
             + $" (jobs still running then: {stillRunning}), drained in {drainedMs} ms (drained: {drained}, request answered: {jobEnded})");
+    }
+
+    private static async Task StatementStopAsync(Action<bool, string> check)
+    {
+        var previous = ActionService.StatementStop.Fallback;
+        ActionService.StatementStop.Fallback = TimeSpan.FromMilliseconds(50);
+        try
+        {
+            // A Stop triggered from another thread as soon as an earlier InfoMessage listener (CollectMessages, SqlService's onInfo)
+            // notes the first message must see streaming == true and defer to the reader thread's OnMessage, never cancel off-thread.
+            await using var connection = new SqlConnection();
+            var cancels = new ConcurrentQueue<int>();
+            using var cts = new CancellationTokenSource();
+            var stop = new ActionService.StatementStop(() => cancels.Enqueue(Environment.CurrentManagedThreadId), cts.Token);
+            stop.Attach(connection);
+            try
+            {
+                using var registration = cts.Token.UnsafeRegister(static state => ((ActionService.StatementStop)state!).FromOtherThread(), stop);
+                ActionService.StatementStop.NoteMessage(connection);
+                await Task.Run(() => cts.Cancel());
+                var deferredOffThread = cancels.IsEmpty;
+                var readerThread = Environment.CurrentManagedThreadId;
+                stop.OnMessage();
+                await Task.Delay(120);
+                check(deferredOffThread && cancels.ToArray().SequenceEqual([readerThread]),
+                    "NoteMessage marks the active StatementStop streaming before an earlier InfoMessage listener triggers Stop from another thread, "
+                    + "so the cancel runs once on the reader thread (deferred: " + deferredOffThread + ", cancels: " + string.Join(",", cancels) + ", reader: " + readerThread + ")");
+            }
+            finally { stop.Detach(connection); }
+
+            // If no second message arrives after NoteMessage + off-thread Stop, the fallback still cancels once.
+            var lateCancels = 0;
+            using var fallbackCts = new CancellationTokenSource();
+            var fallbackStop = new ActionService.StatementStop(() => Interlocked.Increment(ref lateCancels), fallbackCts.Token);
+            fallbackStop.Attach(connection);
+            try
+            {
+                using var registration = fallbackCts.Token.UnsafeRegister(static state => ((ActionService.StatementStop)state!).FromOtherThread(), fallbackStop);
+                ActionService.StatementStop.NoteMessage(connection);
+                await Task.Run(() => fallbackCts.Cancel());
+                var immediate = Volatile.Read(ref lateCancels) == 0;
+                var fired = SpinWait.SpinUntil(() => Volatile.Read(ref lateCancels) == 1, 5_000);
+                fallbackStop.OnMessage();
+                check(immediate && fired && Volatile.Read(ref lateCancels) == 1,
+                    "a streaming StatementStop whose next message never arrives falls back once (" + immediate + ", " + fired + ", " + Volatile.Read(ref lateCancels) + ")");
+            }
+            finally { fallbackStop.Detach(connection); }
+
+            // Before any message arrives, an off-thread Stop cancels immediately once; a later OnMessage does not cancel again.
+            var earlyCancels = 0;
+            using var earlyCts = new CancellationTokenSource();
+            var earlyStop = new ActionService.StatementStop(() => Interlocked.Increment(ref earlyCancels), earlyCts.Token);
+            earlyStop.Attach(connection);
+            try
+            {
+                using var registration = earlyCts.Token.UnsafeRegister(static state => ((ActionService.StatementStop)state!).FromOtherThread(), earlyStop);
+                earlyCts.Cancel();
+                var once = Volatile.Read(ref earlyCancels) == 1;
+                earlyStop.OnMessage();
+                check(once && Volatile.Read(ref earlyCancels) == 1,
+                    "a StatementStop with no message yet cancels immediately once (" + Volatile.Read(ref earlyCancels) + ")");
+            }
+            finally { earlyStop.Detach(connection); }
+        }
+        finally { ActionService.StatementStop.Fallback = previous; }
     }
 }

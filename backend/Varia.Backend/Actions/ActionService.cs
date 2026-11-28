@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Data;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Microsoft.Data.SqlClient;
 using Varia.Backend.Common;
@@ -1797,7 +1798,13 @@ internal sealed partial class ActionService : IDisposable
     internal MessageLog CollectMessages(SqlConnection connection, ActionProgress? progress = null)
     {
         var log = new MessageLog((int)catalog.Limit("infoMessages"), (int)catalog.Limit("infoMessageChars"), progress);
-        connection.InfoMessage += (_, e) => { foreach (SqlError item in e.Errors) log.Add(item); };
+        connection.InfoMessage += (_, e) =>
+        {
+            // CollectMessages subscribes before ReadAllAsync attaches StatementStop; mark the active stop streaming before
+            // log.Add can publish action.progress, so a Stop triggered on the first message never cancels off-thread.
+            StatementStop.NoteMessage(connection);
+            foreach (SqlError item in e.Errors) log.Add(item);
+        };
         return log;
     }
 
@@ -1932,7 +1939,7 @@ internal sealed partial class ActionService : IDisposable
         token.ThrowIfCancellationRequested();
         var connection = command.Connection;
         var stop = new StatementStop(command, token);
-        connection.InfoMessage += stop.OnMessage;
+        stop.Attach(connection);
         try
         {
             using var registration = token.UnsafeRegister(static state => ((StatementStop)state!).FromOtherThread(), stop);
@@ -1947,7 +1954,7 @@ internal sealed partial class ActionService : IDisposable
             if (token.IsCancellationRequested) throw new OperationCanceledException(token);
             return values;
         }
-        finally { connection.InfoMessage -= stop.OnMessage; }
+        finally { stop.Detach(connection); }
     }
 
     /// <summary>How a Stop reaches a running action statement. Once the statement has sent an info message (a RESTORE's STATS),
@@ -1960,13 +1967,51 @@ internal sealed partial class ActionService : IDisposable
     /// SqlException, or now and then in a reader SqlClient ends silently (ReadAllAsync then throws), which the runner reads as
     /// cancelled because the token is. SqlService's query batches stop the same way (a PRINT or RAISERROR WITH NOWAIT loop
     /// streams messages just as a RESTORE does).</summary>
-    internal sealed class StatementStop(SqlCommand command, CancellationToken token)
+    internal sealed class StatementStop
     {
         internal static TimeSpan Fallback { get; set; } = TimeSpan.FromSeconds(1);
+        private static readonly ConditionalWeakTable<SqlConnection, StatementStop> Active = new();
+        private readonly Action cancel;
+        private readonly CancellationToken token;
         private readonly object gate = new();
         private bool streaming, sent;
 
-        public void OnMessage(object sender, SqlInfoMessageEventArgs e)
+        internal StatementStop(SqlCommand command, CancellationToken token) : this(() => Cancel(command), token) { }
+
+        internal StatementStop(Action cancel, CancellationToken token)
+        {
+            this.cancel = cancel;
+            this.token = token;
+        }
+
+        internal void Attach(SqlConnection connection)
+        {
+            connection.InfoMessage += OnMessage;
+            Active.AddOrUpdate(connection, this);
+        }
+
+        internal void Detach(SqlConnection connection)
+        {
+            if (Active.TryGetValue(connection, out var current) && ReferenceEquals(current, this)) Active.Remove(connection);
+            connection.InfoMessage -= OnMessage;
+        }
+
+        /// <summary>Called at the start of any InfoMessage listener subscribed before <see cref="Attach"/> (CollectMessages,
+        /// SqlService's onInfo), so <see cref="FromOtherThread"/> sees the statement streaming even when a Stop is triggered
+        /// directly from the first message's progress or message event.</summary>
+        internal static void NoteMessage(SqlConnection connection)
+        {
+            if (Active.TryGetValue(connection, out var stop)) stop.MarkStreaming();
+        }
+
+        private void MarkStreaming()
+        {
+            lock (gate) streaming = true;
+        }
+
+        public void OnMessage(object sender, SqlInfoMessageEventArgs e) => OnMessage();
+
+        internal void OnMessage()
         {
             lock (gate)
             {
@@ -1974,7 +2019,7 @@ internal sealed partial class ActionService : IDisposable
                 if (!token.IsCancellationRequested || sent) return;
                 sent = true;
             }
-            Cancel();
+            cancel();
         }
 
         public void FromOtherThread()
@@ -1989,7 +2034,7 @@ internal sealed partial class ActionService : IDisposable
                 }
                 sent = true;
             }
-            Cancel();
+            cancel();
         }
 
         private void Late()
@@ -1999,10 +2044,10 @@ internal sealed partial class ActionService : IDisposable
                 if (sent) return;
                 sent = true;
             }
-            Cancel();
+            cancel();
         }
 
-        private void Cancel()
+        private static void Cancel(SqlCommand command)
         {
             try { command.Cancel(); }
             catch (Exception error) when (error is InvalidOperationException or SqlException) { /* Best effort: the statement may have ended. */ }

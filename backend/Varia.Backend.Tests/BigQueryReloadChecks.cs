@@ -553,10 +553,13 @@ internal static class BigQueryReloadChecks
             await Build(c, lone, Guid.NewGuid().ToString());
             await c.Store.Idle();
         }
-        File.Copy(Path.Combine(other.Path, other.Units.Single()), Path.Combine(b.Path, b.Units.Single()), overwrite: true);
+        var targetUnit = Path.Combine(b.Path, b.Units.Single());
         lone.Reset();
         using (var d = Session(b))
         {
+            // Let the opening sweep finish before replacing the file under another key, so the sweep does not remove it before Build lists.
+            await d.Store.Idle();
+            File.Copy(Path.Combine(other.Path, other.Units.Single()), targetUnit, overwrite: true);
             var id = Guid.NewGuid().ToString();
             await Build(d, lone, id);
             await d.Store.Idle();
